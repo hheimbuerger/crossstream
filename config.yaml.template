@@ -1,0 +1,53 @@
+# allow debug outputs
+debug: false
+
+# mount debug pprof endpoint at /debug/pprof/
+pprof: true
+
+# bind server to IP:PORT (use :8888 for all connections)
+bind: :{transcoder_port}
+
+# serve static files from this directory (optional)
+static: {media_dir}/
+
+# X-Forwarded-For headers will be used to determine the client IP
+#proxy: true
+
+# For live streaming
+#streams:
+#  cam: rtmp://localhost/live/cam
+#  ch1_hd: http://192.168.1.34:9981/stream/channelid/85
+#  ch2_hd: http://192.168.1.34:9981/stream/channelid/43
+#  foo: "C:\\Develop\\CrossStream\\proto1\\test_videos\\h-fly-transcode\\hunt.mp4"
+
+# For static files
+vod:
+  # Source, where are static files, that will be transcoded
+  media-dir: {media_dir}/
+  # Temporary transcode output directory, if empty, default tmp folder will be used
+  transcode-dir: {media_dir}/transcode
+  # Available video profiles
+  video-profiles:
+    1080p:
+      width: 1920
+      height: 1080
+      bitrate: 5000
+  # Use video keyframes as existing reference for chunks split
+  # Using this might cause long probing times in order to get
+  # all keyframes - therefore they should be cached
+  video-keyframes: false
+  # Single audio profile used
+  audio-profile:
+    bitrate: 192 # kbps
+  # If cache is enabled
+  cache: true
+  # If dir is empty, cache will be stored in the same directory as media source
+  # If not empty, cache files will be saved to specified directory
+  cache-dir: ./cache
+  # OPTIONAL: Use custom ffmpeg & ffprobe binary paths
+  ffmpeg-binary: ./ffmpeg.exe
+  ffprobe-binary: ./ffprobe.exe
+
+# For proxying HLS streams
+#hls-proxy:
+#  my_server: http://192.168.1.34:9981
