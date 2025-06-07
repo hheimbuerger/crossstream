@@ -1,16 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CrossStream Player</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
     <link rel="stylesheet" href="styles.css">
 </head>
 
 <body>
+    <!-- External libraries -->
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <script src="https://unpkg.com/peerjs@1.3.2/dist/peerjs.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/luxon@3.1.1/build/global/luxon.min.js"></script>
-    <script src="player.js"></script>
+    
+    <!-- Main application script as a module -->
+    <script type="module" src="player.js"></script>
 
     <div class="menu">
-        <button onclick="beginSession(true)">Host</button>
-        <button onclick="beginSession(false)">Join</button>
+        <button id="hostButton">Host</button>
+        <button id="joinButton">Join</button>
     </div>
 
     <div class="videoContainer hidden">
@@ -19,13 +28,13 @@
         <div class="controlGrid">
             <div id="timecode" style="font-size: 40pt; font-family: Arial, Helvetica, sans-serif; color: darkblue;">...</div>
 
-            <button class="speaker-button" id="left-audio-activate" onclick="pm.switchAudio('left')">&#128362;</button>
+            <button class="speaker-button" id="left-audio-activate" data-action="switchAudio" data-arg="left">&#128362;</button>
             <div><!--this space left empty intentionally--></div>
-            <button class="speaker-button" id="right-audio-activate" onclick="pm.switchAudio('right')">&#128362;</button>
+            <button class="speaker-button" id="right-audio-activate" data-action="switchAudio" data-arg="right">&#128362;</button>
 
-            <button class="playback-button" onclick="pm.seek(-15.0, true)">&#x23EA;</button>
-            <button id="playPauseButton" class="playback-button" onclick="pm.togglePlayPause()">&#x23EF;</button>
-            <button class="playback-button" onclick="pm.seek(+15.0, true)">&#x23E9;</button>
+            <button class="playback-button" data-action="seek" data-arg="-15">&#x23EA;</button>
+            <button id="playPauseButton" class="playback-button" data-action="togglePlayPause">&#x23EF;</button>
+            <button class="playback-button" data-action="seek" data-arg="15">&#x23E9;</button>
         </div>
 
         <video id="right-video" style="width: 100%" controls></video>
