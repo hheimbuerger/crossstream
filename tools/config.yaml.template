@@ -43,7 +43,7 @@ vod:
   cache: true
   # If dir is empty, cache will be stored in the same directory as media source
   # If not empty, cache files will be saved to specified directory
-  cache-dir: ./cache
+  cache-dir: ../cache
   # OPTIONAL: Use custom ffmpeg & ffprobe binary paths
   ffmpeg-binary: ./ffmpeg.exe
   ffprobe-binary: ./ffprobe.exe

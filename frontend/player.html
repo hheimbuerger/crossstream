@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CrossStream Player</title>
-    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%2210 0 100 100%22><text y=%22.90em%22 font-size=%2290%22>📼</text></svg>"></link>
     <link rel="stylesheet" href="styles.css">
 </head>
 
@@ -17,13 +17,8 @@
     <!-- Main application script as a module -->
     <script type="module" src="player.js"></script>
 
-    <div class="menu">
-        <button id="hostButton">Host</button>
-        <button id="joinButton">Join</button>
-    </div>
-
-    <div class="videoContainer hidden">
-        <video id="left-video" style="width: 100%" controls></video>
+    <div class="videoContainer">
+        <video id="local-video" style="width: 100%" controls></video>
 
         <div class="controlGrid">
             <div id="timecode" style="font-size: 40pt; font-family: Arial, Helvetica, sans-serif; color: darkblue;">...</div>
@@ -32,15 +27,15 @@
             <div><!--this space left empty intentionally--></div>
             <button class="speaker-button" id="right-audio-activate" data-action="switchAudio" data-arg="right">&#128362;</button>
 
-            <button class="playback-button" data-action="seek" data-arg="-15">&#x23EA;</button>
+            <button id="rewindButton" class="playback-button" data-action="seek" data-arg="-15">&#x23EA;</button>
             <button id="playPauseButton" class="playback-button" data-action="togglePlayPause">&#x23EF;</button>
-            <button class="playback-button" data-action="seek" data-arg="15">&#x23E9;</button>
+            <button id="forwardButton" class="playback-button" data-action="seek" data-arg="15">&#x23E9;</button>
         </div>
 
-        <video id="right-video" style="width: 100%" controls></video>
+        <video id="remote-video" style="width: 100%" controls></video>
     </div>
 
-    <div class="scrubber hidden">
+    <div id="scrubber" class="scrubber">
         <div style="position: relative">
             <div id="playhead-marker"></div>
             <img id="scrubber-left"

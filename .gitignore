@@ -1,5 +1,5 @@
 /config.yaml
 /desktop.ini
-/__pycache__/
+**/__pycache__/
 /cache/
 /.SynologyWorkingDirectory/

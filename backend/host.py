@@ -9,15 +9,15 @@ import re
 import time
 import subprocess
 
-import sprite_builder
+from . import sprite_builder
 
 
 THUMBNAIL_WIDTH = 64
 SECONDS_PER_THUMBNAIL = 5.0
-TRANSCODER_FILENAME = '../go-transcode/go-transcode'
+TRANSCODER_FILENAME = 'tools/transcode-concurrency-2'
 
 
-FILENAME_REGEX = re.compile('Hunt  Showdown (?P<year>\d{4}).(?P<month>\d{2}).(?P<day>\d{2}) - (?P<hour>\d{2}).(?P<minute>\d{2}).(?P<second>\d{2}).(?P<millisecond>\d{2,3})\.mp4')
+FILENAME_REGEX = re.compile(r'Hunt (?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2}) (?P<hour>\d{2})-(?P<minute>\d{2})-(?P<second>\d{2})\.mkv')
 
 
 last_message = None
@@ -28,15 +28,15 @@ class MyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         self.routing_table = {
             '/config': self.process_config,
-            '/thumbnailsprite': self.process_thumbnailsprite,
+            '/thumbnail_sprite.jpeg': self.serve_thumbnail_sprite,
             '/join': self.process_join,
             '/status': self.process_status,
             '/sync': self.process_sync,
             '/stream': self.process_stream,
-            '/': '/player.html',
+            '/': 'player.html',
         }
 
-        super().__init__(*args, directory='.', **kwargs)
+        super().__init__(*args, directory='frontend', **kwargs)
 
     def _router(self):
         parsed_url = urllib.parse.urlparse(self.path)
@@ -49,9 +49,17 @@ class MyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
 
     def _respond_success_json(self, data):
         self.send_response(200)
-        self.send_header('Response-Type', 'application/json')
+        self.send_header('Content-Type', 'application/json')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
+        
+    def serve_thumbnail_sprite(self, query_parameters):
+        print('Serving thumbnail sprite')
+        with open(THUMBNAIL_SPRITE_PATH, 'rb') as f:
+            self.send_response(200)
+            self.send_header('Content-Type', 'image/jpeg')
+            self.end_headers()
+            self.wfile.write(f.read())
 
     def process_config(self, query_parameters):
         local_stream = f'{VOD_BASE_PATH}1080p.m3u8'
@@ -60,7 +68,7 @@ class MyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         # remote_stream = "test_videos/s/sebastian.m3u8"
         # relative_path = str(thumbnail_sprite.relative_to(pathlib.Path())).replace('\\', '/')
         # local_thumbnail_sprite = f'http://{LOCAL_HOST}:{LOCAL_PORT}/{relative_path}'
-        local_thumbnail_sprite = f'http://{LOCAL_HOST}:{TRANSCODER_PORT}/thumbnail_sprite.jpeg'
+        local_thumbnail_sprite = f'http://{LOCAL_HOST}:{LOCAL_PORT}/thumbnail_sprite.jpeg'
         # remote_thumbnail_sprite = "test_videos/s/sebastian.jpeg"
         offsetSeconds = 4.0   # should be: 30.02 - 11.18 = 19! ???
 
@@ -90,10 +98,6 @@ class MyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         remote_port = payload['remote_port']
         filename = payload['video_filename']
         timestamp = payload['timestamp']
-
-    def process_thumbnailsprite(self, query_parameter):
-        # self.path =
-        super().do_GET()
 
     def process_stream(self, query_parameters):
         timer = time.perf_counter()
@@ -192,29 +196,76 @@ class MyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
 def extract_geforce_experience_date(filename):
     result = FILENAME_REGEX.match(filename)
     values = {k: int(v) for k, v in result.groupdict().items()}
-    values['microsecond'] = values['millisecond'] * (10**3 if len(result.groupdict()['millisecond'])==3 else 10**2)
-    del values['millisecond']
+    # values['microsecond'] = values['millisecond'] * (10**3 if len(result.groupdict()['millisecond'])==3 else 10**2)
+    # del values['millisecond']
     return datetime.datetime(**values)
+
+
+def extract_file_creation_time(filepath):
+    """Extract creation time from file metadata on Windows.
+    
+    Args:
+        filepath: Path object or string representing the file
+        
+    Returns:
+        datetime: The creation time of the file
+    """
+    if isinstance(filepath, str):
+        filepath = pathlib.Path(filepath)
+    
+    # Get the creation time in seconds since epoch
+    creation_time = filepath.stat().st_ctime
+    # Convert to timezone-aware datetime in local timezone
+    return datetime.datetime.fromtimestamp(creation_time, tz=datetime.timezone.utc).astimezone()
 
 
 def run_transcode_in_background(port=8888):
     global transcode_proc
-    config_template = pathlib.Path('config.yaml.template')
-    config_file = MEDIA_DIR / 'config.yaml'
+    tools_dir = pathlib.Path('tools')
+    config_template = tools_dir / 'config.yaml.template'
+    config_file = MEDIA_DIR / 'transcode' / 'config.yaml'
+    
+    # Read the config template and write the config file
     with open(config_template, 'r') as f:
-        config = f.read().format(media_dir=str(MEDIA_DIR).replace('\\', '/'), transcoder_port=port)
+        config = f.read().format(media_dir=str(MEDIA_DIR.resolve()).replace('\\', '/'), transcoder_port=port)
         with open(config_file, 'w') as out:
             out.write(config)
-    transcode_proc = subprocess.Popen([TRANSCODER.resolve(), 'serve', '--config', config_file.resolve()], shell=True)
+    
+    # Run the transcoder with tools directory as working directory
+    transcode_cmd = [TRANSCODER.name, 'serve', '--config', str(config_file.resolve())]
+    transcode_proc = subprocess.Popen(
+        transcode_cmd,
+        cwd=tools_dir,
+        shell=True
+    )
 
 
-def determine_latest_video():
+def determine_latest_video_legacy():
+    """Legacy function that finds the latest video based on the filename pattern."""
     hunt_videos = [f for f in MEDIA_DIR.iterdir() if f.is_file() and FILENAME_REGEX.match(f.name)]
     if not hunt_videos:
         print('Error: No valid videos found in media directory!')
         sys.exit(1)
-    newest_video = functools.reduce(lambda x, y: x if extract_geforce_experience_date(x.name) > extract_geforce_experience_date(y.name) else y, hunt_videos)
-    #print('Newest video found is from: ' + extract_geforce_experience_date(newest_video.name).isoformat())
+    newest_video = functools.reduce(
+        lambda x, y: x if extract_geforce_experience_date(x.name) > extract_geforce_experience_date(y.name) else y, 
+        hunt_videos
+    )
+    return newest_video
+
+
+def determine_latest_video():
+    """Find the most recently created video file based on filesystem metadata."""
+    # Get all video files (you might want to add more video extensions)
+    video_extensions = {'.mp4', '.mov', '.avi', '.mkv', '.wmv'}
+    video_files = [f for f in MEDIA_DIR.iterdir() if f.is_file() and f.suffix.lower() in video_extensions]
+    
+    if not video_files:
+        print('Error: No video files found in media directory!')
+        sys.exit(1)
+        
+    # Find the most recently created video
+    newest_video = max(video_files, key=lambda f: f.stat().st_ctime)
+    print(f'Using most recently created video: {newest_video.name} (created: {extract_file_creation_time(newest_video).isoformat()})')
     return newest_video
 
 
@@ -227,16 +278,18 @@ split_host_port = lambda x: (x.split(':')[0], int(x.split(':')[1]))
 LOCAL_HOST, LOCAL_PORT = split_host_port(sys.argv[1])
 #REMOTE_HOST, REMOTE_PORT = split_host_port(sys.argv[2])
 MEDIA_DIR = pathlib.Path(sys.argv[2] if len(sys.argv) >= 3 else '.')
+CACHE_DIR = pathlib.Path('cache')
 TRANSCODER_PORT = int(sys.argv[3]) if len(sys.argv) >= 4 else 8888
 TRANSCODER = pathlib.Path(TRANSCODER_FILENAME)
-VIDEO = determine_latest_video()
-TIMESTAMP = extract_geforce_experience_date(VIDEO.name)
-VOD_BASE_PATH = f'http://{LOCAL_HOST}:{TRANSCODER_PORT}/vod/{urllib.parse.quote(VIDEO.name)}/'
+VIDEO_PATH = determine_latest_video_legacy()
+VIDEO_FILENAME = VIDEO_PATH.name
+TIMESTAMP = extract_geforce_experience_date(VIDEO_PATH.name)
+VOD_BASE_PATH = f'http://{LOCAL_HOST}:{TRANSCODER_PORT}/vod/{urllib.parse.quote(VIDEO_PATH.name)}/'
 print(f'LOCAL_HOST: ({LOCAL_HOST}, {LOCAL_PORT})')
 print(f'MEDIA_DIR: {MEDIA_DIR.resolve()}')
 print(f'TRANSCODER: {TRANSCODER.resolve()}')
 print(f'TRANSCODER_PORT: {TRANSCODER_PORT}')
-print(f'VIDEO: {VIDEO.resolve()}')
+print(f'VIDEO: {VIDEO_PATH.resolve()}')
 print(f'TIMESTAMP: {TIMESTAMP.isoformat()}')
 print()
 
@@ -246,11 +299,11 @@ time.sleep(1)      # let it print some initialization output here
 print()
 
 print('Building thumbnail sprite (may take a few seconds)...')
-thumbnail_sprite = VIDEO.with_name('thumbnail_sprite.jpeg')
-if thumbnail_sprite.is_file():
+THUMBNAIL_SPRITE_PATH = CACHE_DIR / (VIDEO_PATH.stem + '.thumbnail.jpeg')
+if THUMBNAIL_SPRITE_PATH.is_file():
     print('  Found existing thumbnail sprite, using that.')
 else:
-    sprite_builder.build_sprite(VIDEO, thumbnail_sprite, seconds_per_thumbnail=SECONDS_PER_THUMBNAIL, thumbnail_height=THUMBNAIL_WIDTH)
+    sprite_builder.build_sprite(VIDEO_PATH, THUMBNAIL_SPRITE_PATH, seconds_per_thumbnail=SECONDS_PER_THUMBNAIL, thumbnail_height=THUMBNAIL_WIDTH)
     print('  Complete.')
 
 print()

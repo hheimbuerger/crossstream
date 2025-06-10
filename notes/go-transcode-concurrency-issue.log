@@ -1,0 +1,105 @@
+1:26PM INF new hls vod request hlsResource=1080p.m3u8 module=hlsvod path="video.mp4/1080p.m3u8" vodMediaPath="../test_videos/h/video.mp4"
+1:26PM INF new hls vod request hlsResource=1080p-00000.ts module=hlsvod path="video.mp4/1080p-00000.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:26PM INF new hls vod request hlsResource=1080p-00001.ts module=hlsvod path="video.mp4/1080p-00001.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:26PM INF new hls vod request hlsResource=1080p.m3u8 module=hlsvod path="video.mp4/1080p.m3u8" vodMediaPath="../test_videos/h/video.mp4"
+1:26PM INF new hls vod request hlsResource=1080p-00000.ts module=hlsvod path="video.mp4/1080p-00000.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:26PM INF new hls vod request hlsResource=1080p-00002.ts module=hlsvod path="video.mp4/1080p-00002.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:26PM INF new hls vod request hlsResource=1080p-00001.ts module=hlsvod path="video.mp4/1080p-00001.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:26PM INF new hls vod request hlsResource=1080p-00003.ts module=hlsvod path="video.mp4/1080p-00003.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:26PM INF new hls vod request hlsResource=1080p-00002.ts module=hlsvod path="video.mp4/1080p-00002.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:26PM INF new hls vod request hlsResource=1080p-00003.ts module=hlsvod path="video.mp4/1080p-00003.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:26PM INF new hls vod request hlsResource=1080p-00018.ts module=hlsvod path="video.mp4/1080p-00018.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:26PM INF new hls vod request hlsResource=1080p-00019.ts module=hlsvod path="video.mp4/1080p-00019.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:26PM INF new hls vod request hlsResource=1080p-00018.ts module=hlsvod path="video.mp4/1080p-00018.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:26PM INF new hls vod request hlsResource=1080p-00019.ts module=hlsvod path="video.mp4/1080p-00019.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:26PM INF new hls vod request hlsResource=1080p-00020.ts module=hlsvod path="video.mp4/1080p-00020.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:26PM INF new hls vod request hlsResource=1080p-00020.ts module=hlsvod path="video.mp4/1080p-00020.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:26PM INF new hls vod request hlsResource=1080p-00021.ts module=hlsvod path="video.mp4/1080p-00021.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:26PM INF new hls vod request hlsResource=1080p-00021.ts module=hlsvod path="video.mp4/1080p-00021.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:26PM INF new hls vod request hlsResource=1080p-00022.ts module=hlsvod path="video.mp4/1080p-00022.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:26PM INF new hls vod request hlsResource=1080p-00022.ts module=hlsvod path="video.mp4/1080p-00022.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:26PM INF new hls vod request hlsResource=1080p-00023.ts module=hlsvod path="video.mp4/1080p-00023.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:26PM INF new hls vod request hlsResource=1080p-00023.ts module=hlsvod path="video.mp4/1080p-00023.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:31PM INF new hls vod request hlsResource=1080p-00012.ts module=hlsvod path="video.mp4/1080p-00012.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:31PM INF transcoding segments limit=1 module=hlsvod offset=12 segments-times=[96,104] submodule=manager
+2022/12/08 14:31:55 Starting FFmpeg process with args ./ffmpeg.exe -loglevel warning -ss 96.000000 -i ../test_videos/h/video.mp4 -to 104.000000 -copyts -force_key_frames 104.000000 -sn -vf scale=-2:1080 -filter_complex amix=inputs=2 -c:v h264_nvenc -preset p1 -tune:v ull -profile:v high -rc:v cbr -b:v 5000k -c:a aac -b:a 192k -f segment -segment_time_delta 0.2 -segment_format mpegts -segment_times 104.000000 -segment_start_number 12 -segment_list_type flat -segment_list pipe:1 ../test_videos/h/transcode\vod-1080p-47964795/1080p-%05d.ts
+1:31PM INF transcode process started limit=1 module=hlsvod offset=12 submodule=manager
+1:31PM INF new hls vod request hlsResource=1080p-00012.ts module=hlsvod path="video.mp4/1080p-00012.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:31PM INF transcode process returned a segment index=12 limit=1 module=hlsvod offset=12 segment=1080p-00012.ts submodule=manager
+2022/12/08 14:31:59 FFmpeg process successfully finished.
+1:31PM INF new hls vod request hlsResource=1080p-00013.ts module=hlsvod path="video.mp4/1080p-00013.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:31PM INF transcode process finished index=13 limit=1 module=hlsvod offset=12 submodule=manager
+1:31PM INF transcoding segments limit=1 module=hlsvod offset=13 segments-times=[104,112] submodule=manager
+2022/12/08 14:31:59 Starting FFmpeg process with args ./ffmpeg.exe -loglevel warning -ss 104.000000 -i ../test_videos/h/video.mp4 -to 112.000000 -copyts -force_key_frames 112.000000 -sn -vf scale=-2:1080 -filter_complex amix=inputs=2 -c:v h264_nvenc -preset p1 -tune:v ull -profile:v high -rc:v cbr -b:v 5000k -c:a aac -b:a 192k -f segment -segment_time_delta 0.2 -segment_format mpegts -segment_times 112.000000 -segment_start_number 13 -segment_list_type flat -segment_list pipe:1 ../test_videos/h/transcode\vod-1080p-47964795/1080p-%05d.ts
+1:31PM INF transcode process started limit=1 module=hlsvod offset=13 submodule=manager
+1:31PM INF new hls vod request hlsResource=1080p-00013.ts module=hlsvod path="video.mp4/1080p-00013.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:32PM INF transcode process returned a segment index=13 limit=1 module=hlsvod offset=13 segment=1080p-00013.ts submodule=manager
+2022/12/08 14:32:04 FFmpeg process successfully finished.
+1:32PM INF new hls vod request hlsResource=1080p-00014.ts module=hlsvod path="video.mp4/1080p-00014.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:32PM INF transcoding segments limit=1 module=hlsvod offset=14 segments-times=[112,120] submodule=manager
+1:32PM INF transcode process finished index=14 limit=1 module=hlsvod offset=13 submodule=manager
+2022/12/08 14:32:04 Starting FFmpeg process with args ./ffmpeg.exe -loglevel warning -ss 112.000000 -i ../test_videos/h/video.mp4 -to 120.000000 -copyts -force_key_frames 120.000000 -sn -vf scale=-2:1080 -filter_complex amix=inputs=2 -c:v h264_nvenc -preset p1 -tune:v ull -profile:v high -rc:v cbr -b:v 5000k -c:a aac -b:a 192k -f segment -segment_time_delta 0.2 -segment_format mpegts -segment_times 120.000000 -segment_start_number 14 -segment_list_type flat -segment_list pipe:1 ../test_videos/h/transcode\vod-1080p-47964795/1080p-%05d.ts
+1:32PM INF transcode process started limit=1 module=hlsvod offset=14 submodule=manager
+1:32PM INF new hls vod request hlsResource=1080p-00014.ts module=hlsvod path="video.mp4/1080p-00014.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:32PM INF new hls vod request hlsResource=1080p-00015.ts module=hlsvod path="video.mp4/1080p-00015.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:32PM INF transcoding segments limit=1 module=hlsvod offset=15 segments-times=[120,128] submodule=manager
+2022/12/08 14:32:04 Starting FFmpeg process with args ./ffmpeg.exe -loglevel warning -ss 120.000000 -i ../test_videos/h/video.mp4 -to 128.000000 -copyts -force_key_frames 128.000000 -sn -vf scale=-2:1080 -filter_complex amix=inputs=2 -c:v h264_nvenc -preset p1 -tune:v ull -profile:v high -rc:v cbr -b:v 5000k -c:a aac -b:a 192k -f segment -segment_time_delta 0.2 -segment_format mpegts -segment_times 128.000000 -segment_start_number 15 -segment_list_type flat -segment_list pipe:1 ../test_videos/h/transcode\vod-1080p-47964795/1080p-%05d.ts
+1:32PM INF new hls vod request hlsResource=1080p-00015.ts module=hlsvod path="video.mp4/1080p-00015.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:32PM INF transcoding segments limit=1 module=hlsvod offset=15 segments-times=[120,128] submodule=manager
+2022/12/08 14:32:04 Starting FFmpeg process with args ./ffmpeg.exe -loglevel warning -ss 120.000000 -i ../test_videos/h/video.mp4 -to 128.000000 -copyts -force_key_frames 128.000000 -sn -vf scale=-2:1080 -filter_complex amix=inputs=2 -c:v h264_nvenc -preset p1 -tune:v ull -profile:v high -rc:v cbr -b:v 5000k -c:a aac -b:a 192k -f segment -segment_time_delta 0.2 -segment_format mpegts -segment_times 128.000000 -segment_start_number 15 -segment_list_type flat -segment_list pipe:1 ../test_videos/h/transcode\vod-1080p-47964795/1080p-%05d.ts
+1:32PM INF transcode process started limit=1 module=hlsvod offset=15 submodule=manager
+1:32PM INF transcode process started limit=1 module=hlsvod offset=15 submodule=manager
+1:32PM INF new hls vod request hlsResource=1080p-00016.ts module=hlsvod path="video.mp4/1080p-00016.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:32PM INF transcoding segments limit=1 module=hlsvod offset=16 segments-times=[128,136] submodule=manager
+2022/12/08 14:32:08 Starting FFmpeg process with args ./ffmpeg.exe -loglevel warning -ss 128.000000 -i ../test_videos/h/video.mp4 -to 136.000000 -copyts -force_key_frames 136.000000 -sn -vf scale=-2:1080 -filter_complex amix=inputs=2 -c:v h264_nvenc -preset p1 -tune:v ull -profile:v high -rc:v cbr -b:v 5000k -c:a aac -b:a 192k -f segment -segment_time_delta 0.2 -segment_format mpegts -segment_times 136.000000 -segment_start_number 16 -segment_list_type flat -segment_list pipe:1 ../test_videos/h/transcode\vod-1080p-47964795/1080p-%05d.ts
+1:32PM INF new hls vod request hlsResource=1080p-00016.ts module=hlsvod path="video.mp4/1080p-00016.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:32PM INF transcoding segments limit=1 module=hlsvod offset=16 segments-times=[128,136] submodule=manager
+2022/12/08 14:32:08 Starting FFmpeg process with args ./ffmpeg.exe -loglevel warning -ss 128.000000 -i ../test_videos/h/video.mp4 -to 136.000000 -copyts -force_key_frames 136.000000 -sn -vf scale=-2:1080 -filter_complex amix=inputs=2 -c:v h264_nvenc -preset p1 -tune:v ull -profile:v high -rc:v cbr -b:v 5000k -c:a aac -b:a 192k -f segment -segment_time_delta 0.2 -segment_format mpegts -segment_times 136.000000 -segment_start_number 16 -segment_list_type flat -segment_list pipe:1 ../test_videos/h/transcode\vod-1080p-47964795/1080p-%05d.ts
+1:32PM INF transcode process started limit=1 module=hlsvod offset=16 submodule=manager
+1:32PM INF transcode process started limit=1 module=hlsvod offset=16 submodule=manager
+2022/12/08 14:32:09 [h264_nvenc @ 00000273a548f1c0] OpenEncodeSessionEx failed: out of memory (10): (no details)
+2022/12/08 14:32:09 [h264_nvenc @ 00000273a548f1c0] No capable devices found
+2022/12/08 14:32:09 Error initializing output stream 0:1 -- Error while opening encoder for output stream #0:1 - maybe incorrect parameters such as bit_rate, rate, width or height
+2022/12/08 14:32:09 [h264_nvenc @ 00000282534df1c0] OpenEncodeSessionEx failed: out of memory (10): (no details)
+2022/12/08 14:32:09 [h264_nvenc @ 00000282534df1c0] No capable devices found
+2022/12/08 14:32:09 Error initializing output stream 0:1 -- Error while opening encoder for output stream #0:1 - maybe incorrect parameters such as bit_rate, rate, width or height
+2022/12/08 14:32:09 FFmpeg process exited with error: exit status 1
+1:32PM INF transcode process finished index=16 limit=1 module=hlsvod offset=16 submodule=manager
+2022/12/08 14:32:09 FFmpeg process exited with error: exit status 1
+1:32PM INF transcode process finished index=16 limit=1 module=hlsvod offset=16 submodule=manager
+1:32PM INF transcode process returned a segment index=14 limit=1 module=hlsvod offset=14 segment=1080p-00014.ts submodule=manager
+2022/12/08 14:32:10 FFmpeg process successfully finished.
+1:32PM INF transcode process finished index=15 limit=1 module=hlsvod offset=14 submodule=manager
+1:32PM INF transcode process returned a segment index=15 limit=1 module=hlsvod offset=15 segment=1080p-00015.ts submodule=manager
+1:32PM INF transcode process returned a segment index=15 limit=1 module=hlsvod offset=15 segment=1080p-00015.ts submodule=manager
+2022/12/08 14:32:11 FFmpeg process successfully finished.
+1:32PM INF transcode process finished index=16 limit=1 module=hlsvod offset=15 submodule=manager
+2022/12/08 14:32:11 FFmpeg process successfully finished.
+1:32PM INF transcode process finished index=16 limit=1 module=hlsvod offset=15 submodule=manager
+1:32PM WRN media transcode timeouted module=hlsvod submodule=manager
+1:32PM WRN media transcode timeouted module=hlsvod submodule=manager
+1:32PM WRN media transcode timeouted module=hlsvod submodule=manager
+1:32PM INF new hls vod request hlsResource=1080p-00016.ts module=hlsvod path="video.mp4/1080p-00016.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:32PM INF new hls vod request hlsResource=1080p-00016.ts module=hlsvod path="video.mp4/1080p-00016.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:32PM WRN media transcode timeouted module=hlsvod submodule=manager
+1:32PM WRN media transcode timeouted module=hlsvod submodule=manager
+1:32PM INF new hls vod request hlsResource=1080p-00016.ts module=hlsvod path="video.mp4/1080p-00016.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:32PM INF new hls vod request hlsResource=1080p-00016.ts module=hlsvod path="video.mp4/1080p-00016.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:32PM WRN media transcode timeouted module=hlsvod submodule=manager
+1:32PM WRN media transcode timeouted module=hlsvod submodule=manager
+1:32PM INF new hls vod request hlsResource=1080p-00016.ts module=hlsvod path="video.mp4/1080p-00016.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:32PM INF new hls vod request hlsResource=1080p-00016.ts module=hlsvod path="video.mp4/1080p-00016.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:32PM WRN media transcode timeouted module=hlsvod submodule=manager
+1:32PM WRN media transcode timeouted module=hlsvod submodule=manager
+1:32PM INF new hls vod request hlsResource=1080p-00016.ts module=hlsvod path="video.mp4/1080p-00016.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:32PM INF new hls vod request hlsResource=1080p-00016.ts module=hlsvod path="video.mp4/1080p-00016.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:32PM WRN media transcode timeouted module=hlsvod submodule=manager
+1:32PM WRN media transcode timeouted module=hlsvod submodule=manager
+1:32PM INF new hls vod request hlsResource=1080p-00016.ts module=hlsvod path="video.mp4/1080p-00016.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:32PM INF new hls vod request hlsResource=1080p-00016.ts module=hlsvod path="video.mp4/1080p-00016.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:33PM WRN media transcode timeouted module=hlsvod submodule=manager
+1:33PM WRN media transcode timeouted module=hlsvod submodule=manager
+1:33PM INF new hls vod request hlsResource=1080p-00016.ts module=hlsvod path="video.mp4/1080p-00016.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:33PM INF new hls vod request hlsResource=1080p-00016.ts module=hlsvod path="video.mp4/1080p-00016.ts" vodMediaPath="../test_videos/h/video.mp4"
+1:33PM WRN media transcode timeouted module=hlsvod submodule=manager
+1:33PM WRN media transcode timeouted module=hlsvod submodule=manager
