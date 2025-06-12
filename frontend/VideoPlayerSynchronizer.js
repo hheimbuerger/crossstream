@@ -14,6 +14,7 @@ export class VideoPlayerSynchronizer {
     // State
     state = 'paused'; // 'paused' | 'ready' | 'playing'
     audioSource = 'none'; // 'none' | 'local' | 'remote'
+    #playOnceReadyPromise = null; // Tracks the pending playOnceReady operation
     
     // Video elements
     localVideo = null;
@@ -358,7 +359,56 @@ export class VideoPlayerSynchronizer {
         });
     }
 
-    // Public methods
+    /**
+     * Play the videos if they're ready, otherwise queue the play operation
+     * @returns {Promise<void>}
+     */
+    async playOnceReady() {
+        // If already playing, do nothing
+        if (this.state === 'playing') {
+            return;
+        }
+        
+        // If a playOnceReady is already in progress, return that promise
+        if (this.#playOnceReadyPromise) {
+            return this.#playOnceReadyPromise;
+        }
+        
+        // If ready, play immediately
+        if (this.state === 'ready') {
+            return this.play();
+        }
+        
+        // Otherwise, wait for ready state
+        this.#playOnceReadyPromise = new Promise((resolve, reject) => {
+            const onStateChange = (state) => {
+                if (state.state === 'ready') {
+                    this.removeEventListener('stateChange', onStateChange);
+                    this.play().then(resolve).catch(reject);
+                    this.#playOnceReadyPromise = null;
+                }
+            };
+            
+            // Set a timeout to clean up if we never reach ready state
+            const timeout = setTimeout(() => {
+                this.removeEventListener('stateChange', onStateChange);
+                this.#playOnceReadyPromise = null;
+                reject(new Error('Timed out waiting for videos to be ready'));
+            }, 30000); // 30 second timeout
+            
+            // Add event listener for state changes
+            this.addEventListener('stateChange', onStateChange);
+            
+            // Clean up on promise resolution
+            this.#playOnceReadyPromise.finally(() => {
+                clearTimeout(timeout);
+                this.removeEventListener('stateChange', onStateChange);
+            });
+        });
+        
+        return this.#playOnceReadyPromise;
+    }
+    
     async play() {
         if (this.state === 'playing') return;
         
@@ -391,9 +441,14 @@ export class VideoPlayerSynchronizer {
             throw error;
         }
     }
-
+    
     pause() {
         if (this.state === 'paused') return;
+        
+        // Clear any pending playOnceReady
+        if (this.#playOnceReadyPromise) {
+            this.#playOnceReadyPromise = null;
+        }
         
         clearInterval(this.#syncInterval);
         this.localVideo.pause();
@@ -402,7 +457,7 @@ export class VideoPlayerSynchronizer {
         this.state = 'paused';
         this.#emitState();
     }
-
+    
     /**
      * Seeks both videos to the specified time on the local timeline
      * @param {number} localTime - Time in seconds on the local timeline
@@ -426,6 +481,11 @@ export class VideoPlayerSynchronizer {
      * @param {number} remoteTime - Time to seek to on remote video
      */
     #seekVideos(localTime, remoteTime) {
+        // Clear any pending playOnceReady when seeking
+        if (this.#playOnceReadyPromise) {
+            this.#playOnceReadyPromise = null;
+        }
+        
         // Pause both videos first
         this.localVideo.pause();
         this.remoteVideo.pause();

@@ -11,13 +11,15 @@ export class RemoteSyncManager {
      * @param {Function} callbacks.onConnectionEstablished - Called when a connection is established with a peer
      * @param {Function} callbacks.onCommand - Called when a command is received from a peer
      * @param {Function} [callbacks.onError] - Called when an error occurs
+     * @param {number} [maxCommandAge=2000] - Maximum age of commands to process (in milliseconds)
      */
-    constructor(sessionId, localConfig, callbacks) {
+    constructor(sessionId, localConfig, callbacks, maxCommandAge = 2000) {
         this.sessionId = sessionId;
         this.localConfig = localConfig;
         this.callbacks = callbacks;
         this.peer = null;
         this.connection = null;
+        this.maxCommandAge = maxCommandAge;
         
         // Initialize PeerJS with default configuration
         this.peer = new Peer(sessionId || null);
@@ -84,7 +86,7 @@ export class RemoteSyncManager {
                 this.callbacks.onConnectionEstablished?.(data.config);
             } else if (data.type === 'command') {
                 console.log('Received command from peer:', data.command);
-                this.callbacks.onCommand?.(data.command);
+                this.handleIncomingCommand(data.command);
             }
         });
         
@@ -133,6 +135,31 @@ export class RemoteSyncManager {
         } else {
             console.warn('Cannot send command: No active connection');
         }
+    }
+
+    /**
+     * Disconnects from the peer and cleans up resources
+     */
+    /**
+     * Handles an incoming command, applying timestamp validation
+     * @param {Object} command - The command to process
+     * @private
+     */
+    handleIncomingCommand(command) {
+        // Add timestamp if not present (for backward compatibility)
+        if (command.timestamp === undefined) {
+            command.timestamp = Date.now();
+        }
+
+        // Check if command is too old
+        const commandAge = Date.now() - command.timestamp;
+        if (commandAge > this.maxCommandAge) {
+            console.log(`Ignoring stale command (${commandAge}ms old):`, command.type || 'unknown');
+            return;
+        }
+
+        // Process the command
+        this.callbacks.onCommand?.(command);
     }
 
     /**

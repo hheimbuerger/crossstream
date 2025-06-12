@@ -129,8 +129,6 @@ function setupVideoSynchronizer(remoteConfig) {
  * Toggle play/pause state of the video player
  */
 function handlePlayPause() {
-    if (!videoSynchronizer) return;
-    
     const state = videoSynchronizer.getState();
     if (state.state === 'ready') {
         videoSynchronizer.play();
@@ -151,21 +149,18 @@ function handlePlayPause() {
  * @param {number} time - Time in seconds to seek to
  */
 function handleSeek(time) {
-    if (!videoSynchronizer) return;
-    
     const state = videoSynchronizer.getState();
-    if (state.duration > 0) {
-        // Convert absolute time to playhead position (0-1)
-        const playhead = Math.max(0, Math.min(1, time / state.duration));
-        videoSynchronizer.seekToPosition(playhead);
-        
-        // Notify remote peer
-        remoteSyncManager?.sendCommand({
-            type: 'seekTo',
-            timestamp: Date.now(),
-            position: playhead
-        });
-    }
+
+    // Convert absolute time to playhead position (0-1)
+    const playhead = Math.max(0, Math.min(1, time / state.duration));
+    videoSynchronizer.seekToPosition(playhead);
+    
+    // Notify remote peer
+    remoteSyncManager?.sendCommand({
+        type: 'seekTo',
+        timestamp: Date.now(),
+        position: playhead
+    });
 }
 
 /**
@@ -173,8 +168,6 @@ function handleSeek(time) {
  * @param {number} seconds - Number of seconds to seek (positive or negative)
  */
 function handleSeekRelative(seconds) {
-    if (!videoSynchronizer) return;
-    
     const state = videoSynchronizer.getState();
     const currentTime = state.playhead * state.duration;
     const newTime = Math.max(0, Math.min(state.duration, currentTime + seconds));
@@ -195,9 +188,7 @@ function handleSeekRelative(seconds) {
  * Handle play command from remote peer
  * @param {Object} command - Remote command with optional position
  */
-function handleReceivedPlay(command) {
-    if (!videoSynchronizer) return;
-    
+function handleReceivedPlay(command) {  
     // Only follow play commands if we're not already playing
     const state = videoSynchronizer.getState();
     if (state.state !== 'playing') {
@@ -217,8 +208,6 @@ function handleReceivedPlay(command) {
  * @param {Object} command - Remote command with optional position
  */
 function handleReceivedPause(command) {
-    if (!videoSynchronizer) return;
-    
     // Only follow pause commands if we're playing
     const state = videoSynchronizer.getState();
     if (state.state === 'playing') {
@@ -238,15 +227,6 @@ function handleReceivedPause(command) {
  * @param {Object} command - Remote command with position (0-1) and timestamp
  */
 function handleReceivedSeekTo(command) {
-    if (!videoSynchronizer) return;
-    
-    // Only process if the command is recent (within 2 seconds)
-    const commandAge = Date.now() - command.timestamp;
-    if (commandAge > 2000) {
-        console.log('Ignoring stale seek command');
-        return;
-    }
-    
     // Ensure position is within valid range
     if (command.position !== undefined) {
         const position = Math.max(0, Math.min(1, command.position));

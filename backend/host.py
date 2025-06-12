@@ -14,7 +14,7 @@ from . import sprite_builder
 
 THUMBNAIL_WIDTH = 64
 SECONDS_PER_THUMBNAIL = 5.0
-TRANSCODER_FILENAME = 'tools/transcode-concurrency-2'
+TRANSCODER_FILENAME = 'tools/transcode-concurrency-1'
 
 
 FILENAME_REGEX = re.compile(r'Hunt (?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2}) (?P<hour>\d{2})-(?P<minute>\d{2})-(?P<second>\d{2})\.mkv')
