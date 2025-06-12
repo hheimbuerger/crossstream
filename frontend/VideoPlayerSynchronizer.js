@@ -4,17 +4,14 @@
  * Handles frame-accurate synchronization between two HLS video streams.
  * Manages playback state, seeking, and audio routing between the streams.
  */
+import bus from './EventBus.js';
+
 export class VideoPlayerSynchronizer {
-    // Event handling
-    #eventHandlers = {
-        timeUpdate: [],
-        stateChange: []    };
-    #syncInterval = null;
-    
     // State
     state = 'paused'; // 'paused' | 'ready' | 'playing'
     audioSource = 'none'; // 'none' | 'local' | 'remote'
     #playOnceReadyPromise = null; // Tracks the pending playOnceReady operation
+    #syncInterval = null;
     
     // Video elements
     localVideo = null;
@@ -284,12 +281,6 @@ export class VideoPlayerSynchronizer {
     }
 
     #setupEventListeners() {
-        // Initialize event handlers
-        this.#eventHandlers = {
-            timeUpdate: [],
-            stateChange: []
-        };
-
         const updateReadyState = () => {
             if (this.state === 'paused' && 
                 this.localVideo.readyState >= 3 && 
@@ -310,53 +301,25 @@ export class VideoPlayerSynchronizer {
 
     #emitTimeUpdate() {
         const playhead = this.getPlayheadPosition();
-        this.#eventHandlers.timeUpdate.forEach(callback => {
-            try {
-                callback(playhead, this.#totalDuration);
-            } catch (error) {
-                console.error('Error in timeUpdate handler:', error);
-            }
-        });
+        // Emit via central event bus
+        bus.emit('timeUpdate', playhead, this.#totalDuration);
     }
 
     #emitState() {
         const playhead = this.getPlayheadPosition();
-        
         const state = {
             state: this.state,
-            playhead: playhead,
+            playhead,
             duration: this.#totalDuration
         };
-        
+
         this.#lastPosition = playhead;
         this.#lastUpdateTime = performance.now();
-        
-        this.#emit('stateChange', state);
+
+        // Emit via central event bus
+        bus.emit('stateChange', state);
+        // Emit a timeUpdate alongside state change to refresh UI components
         this.#emitTimeUpdate();
-    }
-
-    // Event handling
-    addEventListener(event, callback) {
-        if (this.#eventHandlers[event]) {
-            this.#eventHandlers[event].push(callback);
-        }
-    }
-
-    removeEventListener(event, callback) {
-        if (this.#eventHandlers[event]) {
-            this.#eventHandlers[event] = this.#eventHandlers[event].filter(cb => cb !== callback);
-        }
-    }
-
-    #emit(event, ...args) {
-        const handlers = this.#eventHandlers[event] || [];
-        handlers.forEach(handler => {
-            try {
-                handler(...args);
-            } catch (error) {
-                console.error(`Error in ${event} handler:`, error);
-            }
-        });
     }
 
     /**
@@ -383,7 +346,7 @@ export class VideoPlayerSynchronizer {
         this.#playOnceReadyPromise = new Promise((resolve, reject) => {
             const onStateChange = (state) => {
                 if (state.state === 'ready') {
-                    this.removeEventListener('stateChange', onStateChange);
+                    bus.off('stateChange', onStateChange);
                     this.play().then(resolve).catch(reject);
                     this.#playOnceReadyPromise = null;
                 }
@@ -391,18 +354,18 @@ export class VideoPlayerSynchronizer {
             
             // Set a timeout to clean up if we never reach ready state
             const timeout = setTimeout(() => {
-                this.removeEventListener('stateChange', onStateChange);
+                bus.off('stateChange', onStateChange);
                 this.#playOnceReadyPromise = null;
                 reject(new Error('Timed out waiting for videos to be ready'));
             }, 30000); // 30 second timeout
             
-            // Add event listener for state changes
-            this.addEventListener('stateChange', onStateChange);
+            // Listen for state changes via EventBus
+            bus.on('stateChange', onStateChange);
             
             // Clean up on promise resolution
             this.#playOnceReadyPromise.finally(() => {
                 clearTimeout(timeout);
-                this.removeEventListener('stateChange', onStateChange);
+                bus.off('stateChange', onStateChange);
             });
         });
         

@@ -2,6 +2,7 @@
 import { VideoPlayerSynchronizer } from './VideoPlayerSynchronizer.js';
 import { RemoteSyncManager } from './RemoteSyncManager.js';
 import { UI } from './UI.js';
+import bus from './EventBus.js';
 
 // --- Constants ---
 const SEEK_STEP = 10; // seconds for forward/backward seek
@@ -27,45 +28,66 @@ function setupRemoteSyncManager() {
         remoteSyncManager = null;
     }
     
-    remoteSyncManager = new RemoteSyncManager(SESSION_ID, localStreamConfig, {
-        onConnectionEstablished: (remoteConfig) => {
-            console.log('Connection established with remote peer');
-            ui.hideLoading();
-            setupVideoSynchronizer(remoteConfig);
-            // Initialize scrubber through UI module
-            ui.setupScrubber(localStreamConfig, remoteConfig);
-        },
-        onCommand: (command) => {
-            // Route commands to appropriate handlers
-            switch (command.type) {
-                case 'play':
-                    handleReceivedPlay(command);
-                    break;
-                case 'pause':
-                    handleReceivedPause(command);
-                    break;
-                case 'seekTo':
-                    handleReceivedSeekTo(command);
-                    break;
-                default:
-                    console.warn('Unknown command type:', command.type);
-            }
-        },
-        onError: (error) => {
-            console.error('RemoteSyncManager error:', error);
-            // Don't show error for the first peer that's waiting for connections
-            if (!error.message.includes('Could not connect to peer') || 
-                remoteSyncManager.peer.id === SESSION_ID) {
-                ui.showError('Connection error: ' + error.message);
-            }
-            ui.hideLoading();
-        },
-        onConnectionLost: () => {
-            console.log('Connection to peer lost');
-            ui.showError('Connection to peer lost. Waiting for reconnection...');
-            cleanupPlayer();
+    // Instantiate without callbacks (event bus will be used)
+    remoteSyncManager = new RemoteSyncManager(SESSION_ID, localStreamConfig);
+
+    // --- RemoteSyncManager Bus Listeners ---
+    const onPeerConfig = (remoteConfig) => {
+        console.log('Connection established with remote peer');
+        ui.hideLoading();
+        setupVideoSynchronizer(remoteConfig);
+        ui.setupScrubber(localStreamConfig, remoteConfig);
+    };
+
+    const onRemoteCommand = (command) => {
+        switch (command.type) {
+            case 'play':
+                handleReceivedPlay(command);
+                break;
+            case 'pause':
+                handleReceivedPause(command);
+                break;
+            case 'seekTo':
+                handleReceivedSeekTo(command);
+                break;
+            default:
+                console.warn('Unknown command type:', command.type);
         }
-    });
+    };
+
+    const onSyncError = (error) => {
+        console.error('RemoteSyncManager error:', error);
+        if (!error.message.includes('Could not connect to peer') || remoteSyncManager.peer.id === SESSION_ID) {
+            ui.showError('Connection error: ' + error.message);
+        }
+        ui.hideLoading();
+    };
+
+    const onPeerDisconnected = () => {
+        console.log('Connection to peer lost');
+        ui.showError('Connection to peer lost. Waiting for reconnection...');
+        cleanupPlayer();
+    };
+
+    bus.on('peerConfig', onPeerConfig);
+    bus.on('remoteCommand', onRemoteCommand);
+    bus.on('syncError', onSyncError);
+    bus.on('peerDisconnected', onPeerDisconnected);
+
+    // Cleanup listeners when remoteSyncManager disconnects / app cleans up
+    const cleanupRemoteBus = () => {
+        bus.off('peerConfig', onPeerConfig);
+        bus.off('remoteCommand', onRemoteCommand);
+        bus.off('syncError', onSyncError);
+        bus.off('peerDisconnected', onPeerDisconnected);
+    };
+
+    // Store cleanup function
+    const originalDisconnect = remoteSyncManager.disconnect.bind(remoteSyncManager);
+    remoteSyncManager.disconnect = () => {
+        cleanupRemoteBus();
+        originalDisconnect();
+    };
 }
 
 // --- VideoSynchronizer Setup ---
@@ -94,14 +116,14 @@ function setupVideoSynchronizer(remoteConfig) {
             ui.updatePlayPauseButton(state.state === 'playing');
         };
         
-        // Register event listeners
-        videoSynchronizer.addEventListener('timeUpdate', onTimeUpdate);
-        videoSynchronizer.addEventListener('stateChange', onStateChange);
+        // Register event listeners via central EventBus instead of internal callbacks
+        bus.on('timeUpdate', onTimeUpdate);
+        bus.on('stateChange', onStateChange);
         
         // Store cleanup function
         const cleanup = () => {
-            videoSynchronizer.removeEventListener('timeUpdate', onTimeUpdate);
-            videoSynchronizer.removeEventListener('stateChange', onStateChange);
+            bus.off('timeUpdate', onTimeUpdate);
+            bus.off('stateChange', onStateChange);
         };
         
         // Cleanup on destroy
@@ -264,12 +286,13 @@ function loadConfig() {
 
 async function initializeApp() {
     try {
-        // Initialize UI with event handlers
-        ui = new UI({
-            onPlayPause: handlePlayPause,
-            onSeek: handleSeek,
-            onSeekRelative: handleSeekRelative
-        });
+        // Initialize UI (event handling uses central EventBus now)
+        ui = new UI();
+        
+        // Wire UI-generated events through EventBus to handlers
+        bus.on('playPause', handlePlayPause);
+        bus.on('seek', handleSeek);
+        bus.on('seekRelative', handleSeekRelative);
         
         // Load configuration
         localStreamConfig = await loadConfig();

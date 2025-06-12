@@ -46,29 +46,32 @@ A data class representing the configuration for a single video stream. This conf
 ## Event Handling
 
 ### Overview
-The application uses a unidirectional event flow pattern where UI components emit events that are handled by the player controller. This creates a clear separation of concerns and makes the application more maintainable.
+CrossStream now uses a **single, centralized event bus** powered by the `mitt` library. All components publish and subscribe to events exclusively through this `EventBus` instance. There are **no direct callback props** or bespoke event arrays inside components anymore.
 
 ### Event Flow
 
 1. **User Interactions**
-   - UI components capture user input (clicks, drags, etc.)
-   - Events are translated into semantic actions (play, pause, seek, etc.)
-   - Actions are passed to the player controller via callbacks
+   - UI elements capture user input (clicks, drags, etc.).
+   - Handlers in `UI.js` emit semantic events on the **EventBus** such as `playPause`, `seek`, and `seekRelative`.
 
-2. **State Updates**
-   - Player state changes trigger callbacks to update the UI
-   - UI components update their visual state accordingly
-   - All state mutations are handled by the player controller
+2. **Player Commands**
+   - `VideoPlayerSynchronizer` listens for these command events and invokes the appropriate actions (`play`, `pause`, `seek*`).
 
-### Key Events
+3. **State Updates**
+   - `VideoPlayerSynchronizer` emits playback state and timeline updates (`stateChange`, `timeUpdate`) on the **EventBus**.
+   - UI components and any other interested module subscribe to these events to keep the interface in sync.
 
-| Event | Source | Payload | Description |
-|-------|--------|---------|-------------|
-| `onPlayPause` | UI | None | Toggle between play and pause |
-| `onSeek` | UI | `position` (0-1) | Seek to absolute position |
-| `onSeekRelative` | UI | `seconds` (number) | Seek relative to current time |
-| `onTimeUpdate` | Player | `{currentTime, duration}` | Update time display |
-| `onStateChange` | Player | `{isPlaying, state}` | Update playback state |
+### Core Bus Events
+
+| Event | Emitted By | Payload | Purpose |
+|-------|------------|---------|---------|
+| `playPause` | UI | *none* | Toggle between play and pause |
+| `seek` | UI | `position` (0‒1) | Seek to absolute unified-timeline position |
+| `seekRelative` | UI | `seconds` (number) | Seek relative to current playhead |
+| `timeUpdate` | VideoPlayerSynchronizer | `playhead` (0‒1), `duration` (s) | Continuous timeline updates |
+| `stateChange` | VideoPlayerSynchronizer | `{ state, playhead, duration }` | Changes in playback state |
+
+All new functionality must use these bus events; legacy callback fields have been removed.
 
 ## UI Subsystem
 
@@ -93,8 +96,9 @@ The UI subsystem manages all user interface elements and interactions, serving a
 ### Data Flow
 1. User interactions are captured by UI event listeners
 2. Events are translated into semantic actions
-3. Actions are passed to the player controller via callbacks
-4. Player state changes trigger UI updates through callbacks
+3. Actions are passed to the player controller via the EventBus
+4. Player state changes trigger UI updates through the EventBus
+5. UI reflects the current state (play/pause button, time display, etc.)
 
 ### Performance Considerations
 - DOM updates are batched where possible

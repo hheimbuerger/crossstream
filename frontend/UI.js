@@ -1,20 +1,8 @@
 import { Scrubber } from './Scrubber.js';
-
-/**
- * @typedef {Object} UIEvents
- * @property {Function} onPlayPause - Called when play/pause is triggered
- * @property {Function} onSeek - Called with a time in seconds to seek to
- * @property {Function} onSeekRelative - Called with seconds to seek relative to current time
- */
+import bus from './EventBus.js';
 
 export class UI {
-    /**
-     * @param {UIEvents} events - Event handlers for UI interactions
-     */
-    constructor(events) {
-        if (!events) throw new Error('UI events object is required');
-        this.events = events;
-        
+    constructor() {
         // Initialize DOM elements
         this.elements = {
             localVideo: document.getElementById('local-video'),
@@ -151,10 +139,7 @@ export class UI {
         // Create new scrubber instance with options
         this.scrubber = new Scrubber(this.elements, {
             onSeek: (position) => {
-                // Forward seek events to the player
-                if (this.events?.onSeek) {
-                    this.events.onSeek(position);
-                }
+                bus.emit('seek', position);
             },
             seekDelay: 50, // Debounce seek events during drag for better performance
             localOffset: -localOffset, // Negative because we want to shift the thumbnail left
@@ -213,17 +198,17 @@ export class UI {
         
         // Play/Pause
         playPauseBtn.addEventListener('click', () => {
-            this.events.onPlayPause();
+            bus.emit('playPause');
         });
 
         // Seek backward
         rewindBtn.addEventListener('click', () => {
-            this.events.onSeekRelative(-10); // 10 seconds back
+            bus.emit('seekRelative', -10); // 10 seconds back
         });
 
         // Seek forward
         forwardBtn.addEventListener('click', () => {
-            this.events.onSeekRelative(10); // 10 seconds forward
+            bus.emit('seekRelative', 10); // 10 seconds forward
         });
 
         // Scrubber interaction
@@ -234,7 +219,7 @@ export class UI {
     handleScrubberClick(event) {
         const rect = this.elements.scrubber.getBoundingClientRect();
         const pos = (event.clientX - rect.left) / rect.width;
-        this.events.onSeek(pos);
+        bus.emit('seek', pos);
     }
 
     handleScrubberHover(event) {
@@ -258,7 +243,7 @@ export class UI {
         const errorMessages = document.querySelectorAll('.error-message');
         errorMessages.forEach(el => el.remove());
         
-        // Clean up event listeners
+        // Clean up event listeners by cloning nodes
         const { playPauseBtn, rewindBtn, forwardBtn, scrubber } = this.elements;
         playPauseBtn.replaceWith(playPauseBtn.cloneNode(true));
         rewindBtn.replaceWith(rewindBtn.cloneNode(true));

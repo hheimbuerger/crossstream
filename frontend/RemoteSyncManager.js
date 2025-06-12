@@ -2,21 +2,18 @@
  * RemoteSyncManager - Handles peer-to-peer connection and synchronization
  * using WebRTC via PeerJS.
  */
+import bus from './EventBus.js';
+
 export class RemoteSyncManager {
     /**
      * Creates a new RemoteSyncManager instance and connects to the specified session.
      * @param {string} sessionId - The session ID to connect to
      * @param {Object} localConfig - Local stream configuration to share with peers
-     * @param {Object} callbacks - Callback functions
-     * @param {Function} callbacks.onConnectionEstablished - Called when a connection is established with a peer
-     * @param {Function} callbacks.onCommand - Called when a command is received from a peer
-     * @param {Function} [callbacks.onError] - Called when an error occurs
      * @param {number} [maxCommandAge=2000] - Maximum age of commands to process (in milliseconds)
      */
-    constructor(sessionId, localConfig, callbacks, maxCommandAge = 2000) {
+    constructor(sessionId, localConfig, maxCommandAge = 2000) {
         this.sessionId = sessionId;
         this.localConfig = localConfig;
-        this.callbacks = callbacks;
         this.peer = null;
         this.connection = null;
         this.maxCommandAge = maxCommandAge;
@@ -43,9 +40,7 @@ export class RemoteSyncManager {
         // Handle errors
         this.peer.on('error', (err) => {
             console.error('PeerJS error:', err);
-            if (this.callbacks.onError) {
-                this.callbacks.onError(err);
-            }
+            bus.emit('syncError', err);
         });
 
         // Handle incoming connections (for when another peer joins)
@@ -53,6 +48,9 @@ export class RemoteSyncManager {
             console.log('Incoming connection from:', conn.peer);
             this.connection = conn;
             this.setupDataChannel();
+            
+            // Emit connection event for any interested components
+            bus.emit('peerConnected', { peerId: conn.peer });
         });
     }
 
@@ -83,7 +81,7 @@ export class RemoteSyncManager {
         this.connection.on('data', (data) => {
             if (data.type === 'config') {
                 console.log('Received config from peer:', data.config);
-                this.callbacks.onConnectionEstablished?.(data.config);
+                bus.emit('peerConfig', data.config);
             } else if (data.type === 'command') {
                 console.log('Received command from peer:', data.command);
                 this.handleIncomingCommand(data.command);
@@ -96,7 +94,7 @@ export class RemoteSyncManager {
                 clearTimeout(this.connectionTimeout);
                 this.connectionTimeout = null;
             }
-            this.callbacks.onConnectionLost?.();
+            bus.emit('peerDisconnected');
         });
         
         this.connection.on('error', (err) => {
@@ -105,7 +103,7 @@ export class RemoteSyncManager {
                 clearTimeout(this.connectionTimeout);
                 this.connectionTimeout = null;
             }
-            this.callbacks.onError?.(err);
+            bus.emit('syncError', err);
         });
     }
 
@@ -158,8 +156,8 @@ export class RemoteSyncManager {
             return;
         }
 
-        // Process the command
-        this.callbacks.onCommand?.(command);
+        // Emit the validated command via the event bus
+        bus.emit('remoteCommand', command);
     }
 
     /**
