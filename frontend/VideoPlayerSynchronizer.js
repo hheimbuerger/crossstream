@@ -35,8 +35,6 @@ export class VideoPlayerSynchronizer {
     #remoteStartTime = 0; // Remote video start time (ms since epoch)
     #totalDuration = 0;   // Total duration of the unified timeline (seconds)
     timeOffset = 0;       // Time offset between local and remote videos (seconds)
-    #lastUpdateTime = 0;  // Timestamp of last playhead update (performance.now())
-    #lastPlayhead = 0;    // Last calculated playhead (seconds)
     
     /**
      * Updates the unified timeline based on current video metadata
@@ -67,21 +65,7 @@ export class VideoPlayerSynchronizer {
      * @returns {number} Playhead in seconds
      */
     getPlayhead() {
-        // When paused or buffering, rely on video currentTime => unified timeline
-        if (this.state !== 'playing') {
-            return this.getUnifiedTimeFromVideo(this.localVideo.currentTime, 'local');
-        }
-        
-        // While playing, estimate by elapsed wall-clock time for smoother updates
-        const now = performance.now();
-        if (this.#lastUpdateTime) {
-            const elapsed = (now - this.#lastUpdateTime) / 1000; // seconds elapsed since last capture
-            const candidate = this.#lastPlayhead + elapsed;
-            if (candidate <= this.#totalDuration) {
-                return candidate;
-            }
-        }
-        return this.#lastPlayhead;
+        return this.getUnifiedTimeFromVideo(this.localVideo.currentTime, 'local');
     }
     
     /**
@@ -108,10 +92,6 @@ export class VideoPlayerSynchronizer {
             this.remoteVideo.currentTime = remoteTime;
         }
 
-        // Cache last playhead
-        this.#lastPlayhead = playhead;
-        this.#lastUpdateTime = performance.now();
-        
         this.#emitState();
     }
     
@@ -315,7 +295,6 @@ export class VideoPlayerSynchronizer {
 
     #emitTimeUpdate() {
         const playhead = this.getPlayhead();
-        console.log('emitTimeUpdate', playhead, this.#totalDuration)
         // Emit via central event bus
         bus.emit('timeUpdate', playhead, this.#totalDuration);
     }
