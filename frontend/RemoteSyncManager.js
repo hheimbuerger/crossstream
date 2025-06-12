@@ -94,7 +94,8 @@ export class RemoteSyncManager {
                 console.log('Received config from peer:', data.config);
                 bus.emit('peerConfig', data.config);
             } else if (data.type === 'command') {
-                console.log('Received command from peer:', data.command);
+                // Concise inbound sync logging
+                this._log('IN', data.command);
                 this.handleIncomingCommand(data.command);
             }
         });
@@ -141,6 +142,10 @@ export class RemoteSyncManager {
             command.clock = this._tick();
             command.senderId = this.peerId;
             command.timestamp = Date.now();
+
+            // Concise outbound sync logging
+            this._log('OUT', command);
+
             this.connection.send({
                 type: 'command',
                 command: command
@@ -209,6 +214,37 @@ export class RemoteSyncManager {
     };
 
     /**
+     * Helper: Create concise command summary for logging
+     * @param {Object} command
+     * @returns {string}
+     * @private
+     */
+    _summarizeCommand = (command) => {
+        switch (command.type) {
+            case 'play':
+                return `play @${command.playhead}`;
+            case 'pauseSeek':
+                return `pauseSeek @${command.playhead}`;
+            case 'audioChange':
+                return `audioChange track:${command.track}`;
+            default:
+                return command.type;
+        }
+    };
+
+    /**
+     * Helper: Unified logger for sync messages
+     * @param {"IN"|"OUT"|"WARN"} direction
+     * @param {Object|string} detail
+     * @private
+     */
+    _log = (direction, detail) => {
+        const msg = typeof detail === 'string' ? detail : this._summarizeCommand(detail);
+        const prefix = direction === 'WARN' ? '[SYNC WARN]' : `[SYNC ${direction}]`;
+        (direction === 'WARN' ? console.warn : console.log)(`${prefix} ${msg}`);
+    };
+
+    /**
      * Handles an incoming command, applying timestamp validation
      * @param {Object} command - The command to process
      * @private
@@ -216,7 +252,7 @@ export class RemoteSyncManager {
     handleIncomingCommand(command) {
         // Ignore commands without vector clocks (all supported peers should include them)
         if (!command.clock) {
-            console.warn('Ignoring command without vector clock:', command);
+            this._log('WARN', 'Ignoring command without vector clock');
             return;
         }
 
@@ -225,11 +261,13 @@ export class RemoteSyncManager {
             const cmp = this._compareClocks(command.clock, this.lastAppliedClock);
             if (cmp === -1) {
                 // Incoming command is causally older; ignore
+                this._log('WARN', `Vector clock older command ignored (${this._summarizeCommand(command)})`);
                 return;
             }
             if (cmp === 0) {
                 // Concurrent – tie-break by senderId
                 if (command.senderId > (this.lastAppliedSenderId || '')) {
+                    this._log('WARN', `Vector clock concurrent; kept ${this.lastAppliedSenderId} over ${command.senderId} for ${this._summarizeCommand(command)}`);
                     return; // Keep existing state
                 }
             }

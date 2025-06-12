@@ -51,7 +51,7 @@ function setupRemoteSyncManager() {
     const onPeerDisconnected = () => {
         console.log('Connection to peer lost');
         ui.showError('Connection to peer lost. Waiting for reconnection...');
-        cleanupPlayer();
+        cleanup();
     };
 
     bus.on('peerConfig', onPeerConfig);
@@ -92,13 +92,6 @@ function setupVideoSynchronizer(remoteConfig) {
             ui.elements.remoteVideo,
             remoteConfig
         );
-        
-        // Cleanup on destroy
-        const originalDestroy = videoSynchronizer.destroy.bind(videoSynchronizer);
-        videoSynchronizer.destroy = () => {
-            cleanup();
-            originalDestroy();
-        };
 
         // Hide loading indicator now that setup is complete
         ui.hideLoading();
@@ -138,7 +131,7 @@ async function initializeApp() {
         setupRemoteSyncManager();
         
         // Set up beforeunload handler
-        window.addEventListener('beforeunload', cleanupPlayer);
+        window.addEventListener('beforeunload', cleanup);
 
     } catch (error) {
         console.error('Failed to initialize app:', error);
@@ -149,7 +142,7 @@ async function initializeApp() {
 }
 
 // --- Cleanup Functions ---
-function cleanupPlayer() {
+function cleanup() {
     // Clean up video synchronizer
     videoSynchronizer.destroy();
     videoSynchronizer = null;

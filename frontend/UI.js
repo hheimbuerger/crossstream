@@ -76,7 +76,7 @@ export class UI {
 
     updateTimeDisplay(playhead, duration) {
         const currentTimeFormatted = this.formatTime(playhead);
-        const durationFormatted = this.formatTime(duration);
+        const durationFormatted = this.formatTime(duration || 0);   // FIXME: wtf is duration sometimes undefined, even though I definitely emit 0!???
         this.elements.timeDisplay.textContent = `${currentTimeFormatted} / ${durationFormatted}`;
     }
 
