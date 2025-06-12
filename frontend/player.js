@@ -93,26 +93,6 @@ function setupVideoSynchronizer(remoteConfig) {
             remoteConfig
         );
         
-        // Set up event handlers
-        const onTimeUpdate = (playhead, duration) => {
-            ui.updateScrubberTime(playhead, duration);
-        };
-        
-        const onStateChange = (state) => {
-            // Update UI elements
-            ui.updatePlayPauseButton(state.state === 'playing');
-        };
-        
-        // Register event listeners via central EventBus instead of internal callbacks
-        bus.on('timeUpdate', onTimeUpdate);
-        bus.on('stateChange', onStateChange);
-        
-        // Store cleanup function
-        const cleanup = () => {
-            bus.off('timeUpdate', onTimeUpdate);
-            bus.off('stateChange', onStateChange);
-        };
-        
         // Cleanup on destroy
         const originalDestroy = videoSynchronizer.destroy.bind(videoSynchronizer);
         videoSynchronizer.destroy = () => {

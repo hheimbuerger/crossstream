@@ -17,6 +17,8 @@ export class VideoPlayerSynchronizer {
     audioSource = 'none'; // 'none' | 'local' | 'remote'
     #playOnceReadyPromise = null; // Tracks the pending playOnceReady operation
     #syncInterval = null;
+    #timeUpdateRaf = null;
+    #lastEmittedSecond = null;
     
     // Video elements
     localVideo = null;
@@ -313,6 +315,7 @@ export class VideoPlayerSynchronizer {
 
     #emitTimeUpdate() {
         const playhead = this.getPlayhead();
+        console.log('emitTimeUpdate', playhead, this.#totalDuration)
         // Emit via central event bus
         bus.emit('timeUpdate', playhead, this.#totalDuration);
     }
@@ -410,9 +413,22 @@ export class VideoPlayerSynchronizer {
             
             // Set up sync monitoring
             this.#syncInterval = setInterval(() => {
-                this.#emitTimeUpdate();
                 this.#checkVideoSynchronization();
             }, 1000);
+
+            // Start per-frame timeUpdate emission
+            this.#lastEmittedSecond = null;
+            const emitTimeUpdateLoop = () => {
+                if (this.state !== 'playing') return;
+                const playhead = this.getPlayhead();
+                const currentSecond = Math.floor(playhead);
+                if (this.#lastEmittedSecond !== currentSecond && currentSecond >= 0 && currentSecond <= this.#totalDuration) {
+                    this.#lastEmittedSecond = currentSecond;
+                    this.#emitTimeUpdate();
+                }
+                this.#timeUpdateRaf = requestAnimationFrame(emitTimeUpdateLoop);
+            };
+            this.#timeUpdateRaf = requestAnimationFrame(emitTimeUpdateLoop);
             
             // Emit state update
             this.#emitState();
@@ -425,6 +441,11 @@ export class VideoPlayerSynchronizer {
     }
     
     pause() {
+        if (this.#timeUpdateRaf) {
+            cancelAnimationFrame(this.#timeUpdateRaf);
+            this.#timeUpdateRaf = null;
+        }
+        this.#lastEmittedSecond = null;
         if (this.state === 'paused') return;
         
         // Clear any pending playOnceReady
@@ -459,6 +480,11 @@ export class VideoPlayerSynchronizer {
             clearInterval(this.#syncInterval);
             this.#syncInterval = null;
         }
+        if (this.#timeUpdateRaf) {
+            cancelAnimationFrame(this.#timeUpdateRaf);
+            this.#timeUpdateRaf = null;
+        }
+        this.#lastEmittedSecond = null;
     }
     
     // Get current state

@@ -1,0 +1,29 @@
+﻿rename the remote sync manager to peer connection. Rename VideoPlayerSynchronizer to DualVideoPlayer.
+
+Change everything to TypeScript. Start with the architecture documentation.
+
+Factor out a new component called UnifiedTimeline. This wraps the fields `playhead` and `duration`.
+It is created inside and managed by the VideoPlayerSynchronizer
+It's playersInitialized event on the event bus will contain it, and that's how the Scrubber will receive the duration in the future.
+
+
+onPeerConfig should be a module root function.
+
+
+Ensure our design goals are met regarding race conditions. How is the coalescing implemented?
+
+
+Implement consistent logging for all incoming and outgoing messages to remote and from remote in such a way that I can set a Chrome DevTools filter so that I see only those incoming and outgoing messages but still concise enough to just grasp it in one line.
+Also log a warning whenever an the vector clock is reporting a conflict and its resolution.
+
+
+Open questions:
+[ ] How to handle when one of the videos end? If we're seeking beyond one video, the other should be set to the end of its timeline and then stop.
+[ ] Handle clicking on the part of the timeline before the later video has begun.
+
+
+
+Later later:
+[ ] Reimplement the scrubber 'hover' functionality
+[ ] Should it be possible to 'drag' the scrubber?
+[ ] Rewrite the host.py

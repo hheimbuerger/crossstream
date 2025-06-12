@@ -75,14 +75,9 @@ export class UI {
     }
 
     updateTimeDisplay(playhead, duration) {
-        if (!Number.isFinite(duration) || duration <= 0) return;
-
         const currentTimeFormatted = this.formatTime(playhead);
         const durationFormatted = this.formatTime(duration);
         this.elements.timeDisplay.textContent = `${currentTimeFormatted} / ${durationFormatted}`;
-
-        const ratio = playhead / duration;
-        this.elements.scrubberThumb.style.left = `${ratio * 100}%`;
     }
 
     formatTime(seconds) {
@@ -147,18 +142,6 @@ export class UI {
         return this.scrubber;
     }
     
-    /**
-     * Updates the scrubber's time display
-     * @param {number} playhead - Current playback position in seconds
-     * @param {number} duration - Total duration in seconds
-     */
-    updateScrubberTime(playhead, duration) {
-        if (!this.scrubber || duration <= 0) return;
-
-        // Inform scrubber of new time
-        this.scrubber.updateTime(playhead);
-    }
-    
     // --- Event Listeners ---
     setupEventListeners() {
         const { playPauseBtn, rewindBtn, forwardBtn, scrubber, audioLocalBtn, audioRemoteBtn, audioMuteBtn } = this.elements;
@@ -221,11 +204,8 @@ export class UI {
 
         // Listen for players initialized event
         bus.on('playersInitialized', ({ playhead, duration, localConfig, remoteConfig }) => {
-            if (!this.scrubber && duration > 0) {
-                // Initialize scrubber with the known duration
-                this.setupScrubber(localConfig, remoteConfig, duration);
-                this.updateTimeDisplay(playhead, duration);
-            }
+            this.setupScrubber(localConfig, remoteConfig, duration);
+            this.updateTimeDisplay(playhead, duration);
         });
 
         // Reflect state changes coming from synchronizer
@@ -233,6 +213,11 @@ export class UI {
             this.#updateAudioButtons(state.audioSource);
             this.updatePlayPauseButton(state.state === 'playing');
             this.updateTimeDisplay(state.playhead, state.duration);
+        });
+
+        // Reflect state changes coming from synchronizer
+        bus.on('timeUpdate', (playhead, duration) => {
+            this.updateTimeDisplay(playhead, duration);
         });
 
         // Handle remote audio changes to ensure UI stays in sync
