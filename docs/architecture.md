@@ -58,7 +58,7 @@ CrossStream now uses a **single, centralized event bus** powered by the `mitt` l
    - `VideoPlayerSynchronizer` listens for these command events and invokes the appropriate actions (`play`, `pause`, `seek*`).
 
 3. **State Updates**
-   - `VideoPlayerSynchronizer` emits playback state and timeline updates (`stateChange`, `timeUpdate`) on the **EventBus**.
+   - `VideoPlayerSynchronizer` emits playback state and timeline updates (`stateChange`, `timeUpdate`) on the **EventBus**. `playhead` is always expressed in seconds.
    - UI components and any other interested module subscribe to these events to keep the interface in sync.
 
 ### Core Bus Events
@@ -66,9 +66,9 @@ CrossStream now uses a **single, centralized event bus** powered by the `mitt` l
 | Event | Emitted By | Payload | Purpose |
 |-------|------------|---------|---------|
 | `playPause` | UI | *none* | Toggle between play and pause |
-| `seek` | UI | `position` (0‒1) | Seek to absolute unified-timeline position |
-| `seekRelative` | UI | `seconds` (number) | Seek relative to current playhead |
-| `timeUpdate` | VideoPlayerSynchronizer | `playhead` (0‒1), `duration` (s) | Continuous timeline updates |
+| `seek` | UI | `playhead` (seconds) | Seek to absolute unified-timeline time |
+| `seekRelative` | UI | `delta` (seconds) | Seek relative to current playhead |
+| `timeUpdate` | VideoPlayerSynchronizer | `playhead` (seconds), `duration` (s) | Continuous timeline updates |
 | `stateChange` | VideoPlayerSynchronizer | `{ state, playhead, duration }` | Changes in playback state |
 
 All new functionality must use these bus events; legacy callback fields have been removed.
@@ -92,6 +92,10 @@ The UI subsystem manages all user interface elements and interactions, serving a
    - Manages thumbnail display and hover states
    - Provides seek functionality
    - Handles both mouse and touch interactions
+   - Constructed with `{ duration, onSeek }` where `duration` is unified timeline length in seconds.
+   - All user interactions (drag, click) emit seconds directly.
+   - Hover moves the thumb without seeking via `handleHover(clientX)`.
+   - No internal concept of 0-1 ratios is exposed outside the component.
 
 ### Data Flow
 1. User interactions are captured by UI event listeners
@@ -173,10 +177,10 @@ The unified playhead represents the current playback position across the entire 
 
 ### Key Properties
 
-1. **Playhead Position (0-1)**:
+1. **Playhead Position (seconds)**:
    - Represents the current position in the unified timeline
    - 0 = start of the timeline (earliest frame)
-   - 1 = end of the timeline (latest frame)
+   - `totalDuration` = end of the timeline (latest frame)
 
 2. **Timeline Bounds**:
    - Start time: When the first video starts
@@ -190,7 +194,7 @@ The unified playhead represents the current playback position across the entire 
    - Handles seeking to positions where only one video has content
 
 2. **Get Current Position**
-   - Returns the current playhead position (0-1) in the unified timeline
+   - Returns the current playhead position (seconds) in the unified timeline
    - Provides smooth updates during playback
 
 3. **Time Conversion**

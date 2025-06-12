@@ -7,7 +7,8 @@
  * @property {HTMLElement} [timeDisplay] - Optional time display element
  * 
  * @typedef {Object} ScrubberOptions
- * @property {Function} onSeek - Callback when user seeks to a position (0-1)
+ * @property {Function} onSeek - Callback when user seeks to a playhead time (seconds)
+ * @property {number} duration - Total duration of the unified timeline in seconds (required)
  * @property {number} [seekDelay=0] - Delay in ms before triggering seek (for performance)
  */
 
@@ -17,9 +18,12 @@ export class Scrubber {
      * @param {ScrubberElements} elements - Required DOM elements
      * @param {ScrubberOptions} options - Configuration options
      */
-    constructor(elements, { onSeek, seekDelay = 0, localOffset = 0, remoteOffset = 0 } = {}) {
+    constructor(elements, { onSeek, duration, seekDelay = 0, localOffset = 0, remoteOffset = 0 } = {}) {
         if (!elements || !elements.scrubber) {
             throw new Error('Scrubber requires a valid scrubber element');
+        }
+        if (!Number.isFinite(duration) || duration <= 0) {
+            throw new Error('Scrubber requires a valid duration (seconds)');
         }
         
         this.elements = elements;
@@ -28,6 +32,7 @@ export class Scrubber {
         this.isDragging = false;
         this.lastSeekTime = 0;
         this.seekTimeout = null;
+        this.duration = duration;
         
         // Bind methods
         this.handleMouseDown = this.handleMouseDown.bind(this);
@@ -173,43 +178,47 @@ export class Scrubber {
         const { scrubber } = this.elements;
         const rect = scrubber.getBoundingClientRect();
         
-        // Convert mouse position to normalized timeline position (0-1)
-        let position = (clientX - rect.left) / rect.width;
-        position = Math.max(0, Math.min(1, position)); // Clamp between 0 and 1
+        // Guard against unknown duration
+        if (this.duration <= 0) return;
         
-        // Update thumb position
+        // Convert mouse position to ratio (0-1) then to seconds
+        let ratio = (clientX - rect.left) / rect.width;
+        ratio = Math.max(0, Math.min(1, ratio));
+        
+        const playheadSeconds = ratio * this.duration;
+        
+        // Update thumb visually
         if (this.elements.scrubberThumb) {
-            this.elements.scrubberThumb.style.left = `${position * 100}%`;
+            this.elements.scrubberThumb.style.left = `${ratio * 100}%`;
         }
         
-        this.lastPosition = position;
+        this.lastPosition = playheadSeconds;
         
         // Throttle seek events during drag
+        const fire = () => this.triggerSeek(playheadSeconds);
+        
         if (immediate || !this.isDragging) {
-            this.triggerSeek(position);
+            fire();
         } else if (this.seekDelay > 0) {
-            // Debounce seek events during drag
-            if (this.seekTimeout) {
-                clearTimeout(this.seekTimeout);
-            }
+            if (this.seekTimeout) clearTimeout(this.seekTimeout);
             this.seekTimeout = setTimeout(() => {
-                this.triggerSeek(position);
+                fire();
                 this.seekTimeout = null;
             }, this.seekDelay);
         } else {
-            this.triggerSeek(position);
+            fire();
         }
     }
     
     /**
      * Triggers the seek callback with rate limiting
-     * @param {number} position - Seek position (0-1)
+     * @param {number} playheadSeconds - Playhead in seconds
      * @private
      */
-    triggerSeek(position) {
+    triggerSeek(playheadSeconds) {
         const now = Date.now();
-        if (now - this.lastSeekTime > 50) { // Limit to 20fps for seek updates
-            this.onSeek(position);
+        if (now - this.lastSeekTime > 50) {
+            this.onSeek(playheadSeconds);
             this.lastSeekTime = now;
         }
     }
@@ -221,8 +230,11 @@ export class Scrubber {
      */
     handleScrubberClick(e) {
         const rect = this.elements.scrubber.getBoundingClientRect();
-        const position = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-        this.onSeek(position);
+        const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        if (this.duration > 0) {
+            const playheadSeconds = ratio * this.duration;
+            this.onSeek(playheadSeconds);
+        }
     }
     
     /**
@@ -252,20 +264,29 @@ export class Scrubber {
     }
 
     /**
-     * Updates the scrubber position and time display
-     * @param {number} playhead - Current playback position in unified timeline (0-1)
-     * @param {number} duration - Total duration of the unified timeline in seconds
+     * Updates the scrubber thumb.
+     * @param {number} playheadSeconds - Playhead in seconds
      */
-    updateTime(playhead, duration) {
-        if (duration <= 0 || playhead < 0 || playhead > 1) return;
-        
-        // Update scrubber thumb position (playhead is 0-1)
-        this.elements.scrubberThumb.style.left = `${playhead * 100}%`;
-        
-        // Update time display if available
-        if (this.elements.timeDisplay) {
-            const currentTime = playhead * duration;
-            this.elements.timeDisplay.textContent = this.formatTime(currentTime);
+    updateTime(playheadSeconds) {
+        const ratio = playheadSeconds / this.duration;
+        if (ratio < 0 || ratio > 1) return;
+
+        // Update thumb
+        if (this.elements.scrubberThumb) {
+            this.elements.scrubberThumb.style.left = `${ratio * 100}%`;
+        }
+    }
+    
+    /**
+     * Handle hover movement (no seek)
+     * @param {number} clientX - Mouse X over scrubber
+     */
+    handleHover(clientX) {
+        const { scrubber } = this.elements;
+        const rect = scrubber.getBoundingClientRect();
+        const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+        if (this.elements.scrubberThumb) {
+            this.elements.scrubberThumb.style.left = `${ratio * 100}%`;
         }
     }
     

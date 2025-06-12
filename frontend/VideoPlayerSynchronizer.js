@@ -29,7 +29,7 @@ export class VideoPlayerSynchronizer {
     #totalDuration = 0;   // Total duration of the unified timeline (seconds)
     timeOffset = 0;       // Time offset between local and remote videos (seconds)
     #lastUpdateTime = 0;  // Timestamp of last playhead update (performance.now())
-    #lastPosition = 0;    // Last calculated playhead position (0-1)
+    #lastPlayhead = 0;    // Last calculated playhead (seconds)
     
     /**
      * Updates the unified timeline based on current video metadata
@@ -56,78 +56,77 @@ export class VideoPlayerSynchronizer {
     }
     
     /**
-     * Gets the current playhead position in the unified timeline
-     * @returns {number} Position in the unified timeline (0-1)
+     * Gets the current playhead (seconds) in the unified timeline
+     * @returns {number} Playhead in seconds
      */
-    getPlayheadPosition() {
+    getPlayhead() {
+        // When paused or buffering, rely on video currentTime => unified timeline
         if (this.state !== 'playing') {
-            // If not playing, return exact position based on video time
-            return this.getTimelinePosition(this.localVideo.currentTime, 'local');
+            return this.getUnifiedTimeFromVideo(this.localVideo.currentTime, 'local');
         }
         
-        // If playing, calculate position based on last update time for smoother updates
+        // While playing, estimate by elapsed wall-clock time for smoother updates
         const now = performance.now();
         if (this.#lastUpdateTime) {
-            const elapsed = (now - this.#lastUpdateTime) / 1000; // Convert to seconds
-            const newPosition = this.#lastPosition + (elapsed / this.#totalDuration);
-            if (newPosition <= 1) {
-                return newPosition;
+            const elapsed = (now - this.#lastUpdateTime) / 1000; // seconds elapsed since last capture
+            const candidate = this.#lastPlayhead + elapsed;
+            if (candidate <= this.#totalDuration) {
+                return candidate;
             }
         }
-        return this.#lastPosition;
+        return this.#lastPlayhead;
     }
     
     /**
-     * Seeks to a specific position in the unified timeline
-     * @param {number} position - Position in the unified timeline (0-1)
+     * Seeks to a specific playhead (seconds) in the unified timeline
+     * @param {number} playhead - Playhead in seconds
      */
-    seekToPosition(position) {
-        position = Math.max(0, Math.min(1, position));
+    seek(playhead) {
+        playhead = Math.max(0, Math.min(this.#totalDuration, playhead));
         
-        // Update local video
-        const localTime = this.getVideoTime(position, 'local');
+        // Translate unified playhead → individual video currentTime values
+        const localTime = this.getVideoTimeForUnified(playhead, 'local');
+        const remoteTime = this.getVideoTimeForUnified(playhead, 'remote');
+        
         if (localTime <= this.localVideo.duration) {
             this.localVideo.currentTime = localTime;
         }
         
-        // Update remote video
-        const remoteTime = this.getVideoTime(position, 'remote');
         if (remoteTime <= this.remoteVideo.duration) {
             this.remoteVideo.currentTime = remoteTime;
         }
         
-        // Update playhead state
-        this.#lastPosition = position;
+        // Cache last playhead
+        this.#lastPlayhead = playhead;
         this.#lastUpdateTime = performance.now();
         
-        // Emit state update
         this.#emitState();
     }
     
     /**
-     * Converts a timeline position (0-1) to a specific video's time
-     * @param {number} position - Position on the unified timeline (0-1)
+     * Converts a video's current time to a unified timeline time
+     * @param {number} currentTime - Current time of the video in seconds
+     * @param {'local'|'remote'} source - Which video the time is from
+     * @returns {number} Unified timeline time in seconds
+     * @private
+     */
+    getUnifiedTimeFromVideo(currentTime, source) {
+        const startTime = source === 'local' ? this.#localStartTime : this.#remoteStartTime;
+        const timelineMs = startTime + (currentTime * 1000);
+        return (timelineMs - this.#timelineStart) / 1000;
+    }
+    
+    /**
+     * Converts a unified timeline time to a specific video's time
+     * @param {number} unifiedTime - Unified timeline time in seconds
      * @param {'local'|'remote'} target - Which video to get time for
      * @returns {number} Time in seconds for the target video
      * @private
      */
-    getVideoTime(position, target) {
-        const timelineMs = this.#timelineStart + (position * this.#totalDuration * 1000);
+    getVideoTimeForUnified(unifiedTime, target) {
+        const timelineMs = this.#timelineStart + (unifiedTime * 1000);
         const startTime = target === 'local' ? this.#localStartTime : this.#remoteStartTime;
         return (timelineMs - startTime) / 1000;
-    }
-    
-    /**
-     * Converts a video's current time to a position on the unified timeline
-     * @param {number} currentTime - Current time of the video in seconds
-     * @param {'local'|'remote'} source - Which video the time is from
-     * @returns {number} Position on the unified timeline (0-1)
-     * @private
-     */
-    getTimelinePosition(currentTime, source) {
-        const startTime = source === 'local' ? this.#localStartTime : this.#remoteStartTime;
-        const timelineMs = startTime + (currentTime * 1000);
-        return (timelineMs - this.#timelineStart) / (this.#totalDuration * 1000);
     }
     
     /**
@@ -164,7 +163,7 @@ export class VideoPlayerSynchronizer {
         this.timeOffset = this.#calculateTimeOffset(localConfig.timestamp, remoteConfig.timestamp);
         
         // Initialize players with configs
-        this.#initializePlayers(localConfig.stream, remoteConfig.stream);
+        this.#initializePlayers(localConfig, remoteConfig);
         
         // Set up event listeners for state management
         this.#setupEventListeners();
@@ -172,9 +171,8 @@ export class VideoPlayerSynchronizer {
         // Bind methods
         this.play = this.play.bind(this);
         this.pause = this.pause.bind(this);
-        this.seekLocal = this.seekLocal.bind(this);
-        this.seekRemote = this.seekRemote.bind(this);
         this.switchAudio = this.switchAudio.bind(this);
+        this.seek = this.seek.bind(this);
         this.destroy = this.destroy.bind(this);
     }
 
@@ -190,13 +188,13 @@ export class VideoPlayerSynchronizer {
         return (remoteStart - localStart) / 1000; // Convert ms to seconds
     }
 
-    async #initializePlayers(localStreamUrl, remoteStreamUrl) {
+    async #initializePlayers(localConfig, remoteConfig) {
         try {
             // Initialize local video
-            await this.#initializeHlsPlayer(localStreamUrl, this.localVideo, 'local');
+            await this.#initializeHlsPlayer(localConfig.stream, this.localVideo, 'local');
             
             // Initialize remote video
-            await this.#initializeHlsPlayer(remoteStreamUrl, this.remoteVideo, 'remote');
+            await this.#initializeHlsPlayer(remoteConfig.stream, this.remoteVideo, 'remote');
             
             // Wait for both videos to have metadata loaded
             await Promise.all([
@@ -214,8 +212,15 @@ export class VideoPlayerSynchronizer {
             
             // Seek to the first shared frame
             const firstSharedFramePos = this.#getFirstSharedFramePosition();
-            await this.seekToPosition(firstSharedFramePos);
+            await this.seek(this.getUnifiedTimeFromVideo(firstSharedFramePos, 'local'));
             
+            // Allow the part of the UI that requires video player information to initialize
+            bus.emit('playersInitialized', {
+                playhead: this.getPlayhead(),
+                duration: this.#totalDuration,
+                localConfig: localConfig,
+                remoteConfig: remoteConfig
+            });
         } catch (error) {
             console.error('Failed to initialize players:', error);
             throw error;
@@ -300,20 +305,22 @@ export class VideoPlayerSynchronizer {
     }
 
     #emitTimeUpdate() {
-        const playhead = this.getPlayheadPosition();
+        const playhead = this.getPlayhead();
         // Emit via central event bus
         bus.emit('timeUpdate', playhead, this.#totalDuration);
     }
 
     #emitState() {
-        const playhead = this.getPlayheadPosition();
+        const playhead = this.getPlayhead();
         const state = {
             state: this.state,
             playhead,
-            duration: this.#totalDuration
+            duration: this.#totalDuration,
+            audioSource: this.audioSource,
+            timeOffset: this.timeOffset
         };
 
-        this.#lastPosition = playhead;
+        this.#lastPlayhead = playhead;
         this.#lastUpdateTime = performance.now();
 
         // Emit via central event bus
@@ -420,44 +427,6 @@ export class VideoPlayerSynchronizer {
         this.state = 'paused';
         this.#emitState();
     }
-    
-    /**
-     * Seeks both videos to the specified time on the local timeline
-     * @param {number} localTime - Time in seconds on the local timeline
-     */
-    async seekLocal(localTime) {
-        await this.#seekVideos(localTime, localTime + this.timeOffset);
-    }
-
-    /**
-     * Seeks both videos to the specified time on the remote timeline
-     * @param {number} remoteTime - Time in seconds on the remote timeline
-     */
-    async seekRemote(remoteTime) {
-        await this.#seekVideos(remoteTime - this.timeOffset, remoteTime);
-    }
-
-    /**
-     * Internal method to handle seeking both videos
-     * @private
-     * @param {number} localTime - Time to seek to on local video
-     * @param {number} remoteTime - Time to seek to on remote video
-     */
-    #seekVideos(localTime, remoteTime) {
-        // Clear any pending playOnceReady when seeking
-        if (this.#playOnceReadyPromise) {
-            this.#playOnceReadyPromise = null;
-        }
-        
-        // Pause both videos first
-        this.localVideo.pause();
-        this.remoteVideo.pause();
-        this.state = 'paused';
-
-        // Set new times - the event handlers will update the state when ready
-        this.localVideo.currentTime = localTime;
-        this.remoteVideo.currentTime = remoteTime;
-    }
 
     switchAudio(source) {
         if (source !== 'local' && source !== 'remote') {
@@ -478,32 +447,17 @@ export class VideoPlayerSynchronizer {
         const handlers = {
             play: () => this.play(),
             pause: () => this.pause(),
-            seekbackward: (details) => this.seekRelative(-(details.seekOffset || 10)),
-            seekforward: (details) => this.seekRelative(details.seekOffset || 10),
             seekto: (details) => {
                 if (details.seekTime !== undefined) {
-                    const state = this.getState();
-                    if (state.duration > 0) {
-                        const playhead = Math.max(0, Math.min(1, details.seekTime / state.duration));
-                        this.seekToPosition(playhead);
-                    }
+                    this.seek(details.seekTime);
                 }
             }
         };
-        
-        // Register handlers
-        for (const [action, handler] of Object.entries(handlers)) {
-            try {
-                navigator.mediaSession.setActionHandler(action, handler);
-            } catch (error) {
-                console.warn(`Media session action '${action}' not supported:`, error);
-            }
-        }
     }
     
     // Get current state
     getState() {
-        const playhead = this.getPlayheadPosition();
+        const playhead = this.getPlayhead();
         return {
             state: this.state,
             playhead: playhead,

@@ -19,7 +19,6 @@ export class UI {
         
         this.scrubber = null;
         this.setupEventListeners();
-        this.setupMediaSessionHandlers();
     }
 
     // --- Error and Loading States ---
@@ -72,15 +71,14 @@ export class UI {
     }
 
     updateTimeDisplay(playhead, duration) {
-        if (!duration) return;
-        
-        const currentTime = playhead * duration;
-        const currentTimeFormatted = this.formatTime(currentTime);
+        if (!Number.isFinite(duration) || duration <= 0) return;
+
+        const currentTimeFormatted = this.formatTime(playhead);
         const durationFormatted = this.formatTime(duration);
         this.elements.timeDisplay.textContent = `${currentTimeFormatted} / ${durationFormatted}`;
-        
-        // Update scrubber position (playhead is already 0-1)
-        this.elements.scrubberThumb.style.left = `${playhead * 100}%`;
+
+        const ratio = playhead / duration;
+        this.elements.scrubberThumb.style.left = `${ratio * 100}%`;
     }
 
     formatTime(seconds) {
@@ -89,32 +87,14 @@ export class UI {
         return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
     }
 
-    // --- Media Session API ---
-    setupMediaSessionHandlers(onPlayPause, onSeekBackward, onSeekForward, onSeekTo) {
-        navigator.mediaSession.setActionHandler('play', onPlayPause);
-        navigator.mediaSession.setActionHandler('pause', onPlayPause);
-        navigator.mediaSession.setActionHandler('seekbackward', onSeekBackward);
-        navigator.mediaSession.setActionHandler('seekforward', onSeekForward);
-        navigator.mediaSession.setActionHandler('seekto', (details) => {
-            onSeekTo(details.seekTime);
-        });
-    }
-
-    updateMediaSessionMetadata(title, artist, artwork) {
-        navigator.mediaSession.metadata = new MediaMetadata({
-            title: title || 'CrossStream',
-            artist: artist || 'CrossStream',
-            artwork: artwork || []
-        });
-    }
-
     // --- Scrubber Management ---
     /**
      * Initializes the scrubber component with the provided configurations
      * @param {Object} localConfig - Local video configuration
      * @param {Object} remoteConfig - Remote video configuration
+     * @param {number} totalDuration - Total duration of the video
      */
-    setupScrubber(localConfig, remoteConfig) {
+    setupScrubber(localConfig, remoteConfig, totalDuration) {
         // Clean up existing scrubber if any
         if (this.scrubber) {
             this.scrubber.cleanup();
@@ -138,8 +118,9 @@ export class UI {
 
         // Create new scrubber instance with options
         this.scrubber = new Scrubber(this.elements, {
-            onSeek: (position) => {
-                bus.emit('seek', position);
+            duration: totalDuration,
+            onSeek: (playheadSeconds) => {
+                bus.emit('seek', playheadSeconds);
             },
             seekDelay: 50, // Debounce seek events during drag for better performance
             localOffset: -localOffset, // Negative because we want to shift the thumbnail left
@@ -164,34 +145,16 @@ export class UI {
     
     /**
      * Updates the scrubber's time display
-     * @param {number} playhead - Current playback position in the unified timeline (0-1)
+     * @param {number} playhead - Current playback position in seconds
      * @param {number} duration - Total duration in seconds
      */
     updateScrubberTime(playhead, duration) {
-        if (!this.scrubber) return;
-        
-        // Update time display
-        if (this.elements.timeDisplay) {
-            const currentTime = playhead * duration;
-            this.elements.timeDisplay.textContent = 
-                `${this.formatTime(currentTime)} / ${this.formatTime(duration)}`;
-        }
-        
-        // Update scrubber position (playhead is already 0-1)
-        this.elements.scrubberThumb.style.left = `${playhead * 100}%`;
+        if (!this.scrubber || duration <= 0) return;
+
+        // Inform scrubber of new time
+        this.scrubber.updateTime(playhead);
     }
     
-    /**
-     * Helper to format time in MM:SS format
-     * @private
-     */
-    formatTime(seconds) {
-        if (!Number.isFinite(seconds)) return '0:00';
-        const minutes = Math.floor(seconds / 60);
-        const secs = Math.floor(seconds % 60);
-        return `${minutes}:${secs.toString().padStart(2, '0')}`;
-    }
-
     // --- Event Listeners ---
     setupEventListeners() {
         const { playPauseBtn, rewindBtn, forwardBtn, scrubber } = this.elements;
@@ -211,22 +174,28 @@ export class UI {
             bus.emit('seekRelative', 10); // 10 seconds forward
         });
 
-        // Scrubber interaction
-        scrubber.addEventListener('click', this.handleScrubberClick.bind(this));
-        scrubber.addEventListener('mousemove', this.handleScrubberHover.bind(this));
-    }
+        // Scrubber hover delegation (thumb highlight only)
+        scrubber.addEventListener('mousemove', (e) => {
+            if (this.scrubber) {
+                this.scrubber.handleHover(e.clientX);
+            }
+        });
 
-    handleScrubberClick(event) {
-        const rect = this.elements.scrubber.getBoundingClientRect();
-        const pos = (event.clientX - rect.left) / rect.width;
-        bus.emit('seek', pos);
-    }
-
-    handleScrubberHover(event) {
-        // Update hover preview if needed
-        const rect = this.elements.scrubber.getBoundingClientRect();
-        const pos = (event.clientX - rect.left) / rect.width;
-        this.elements.scrubberThumb.style.left = `${pos * 100}%`;
+        // Click -> seek
+        scrubber.addEventListener('click', (e) => {
+            if (this.scrubber) {
+                this.scrubber.handleScrubberClick(e);
+            }
+        });
+    
+        // Listen for players initialized event
+        bus.on('playersInitialized', ({ playhead, duration, localConfig, remoteConfig }) => {
+            if (!this.scrubber && duration > 0) {
+                // Initialize scrubber with the known duration
+                this.setupScrubber(localConfig, remoteConfig, duration);
+                this.updateTimeDisplay(playhead, duration);
+            }
+        });
     }
 
     // --- Cleanup ---

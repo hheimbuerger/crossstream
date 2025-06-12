@@ -36,7 +36,6 @@ function setupRemoteSyncManager() {
         console.log('Connection established with remote peer');
         ui.hideLoading();
         setupVideoSynchronizer(remoteConfig);
-        ui.setupScrubber(localStreamConfig, remoteConfig);
     };
 
     const onRemoteCommand = (command) => {
@@ -47,8 +46,8 @@ function setupRemoteSyncManager() {
             case 'pause':
                 handleReceivedPause(command);
                 break;
-            case 'seekTo':
-                handleReceivedSeekTo(command);
+            case 'seek':
+                handleReceivedSeek(command);
                 break;
             default:
                 console.warn('Unknown command type:', command.type);
@@ -162,53 +161,48 @@ function handlePlayPause() {
     remoteSyncManager?.sendCommand({
         type: state.state === 'playing' ? 'pause' : 'play',
         timestamp: Date.now(),
-        position: state.playhead // Include current playhead position
+        playhead: state.playhead // Include current playhead position
     });
 }
 
 /**
- * Handle seek to a specific time in the unified timeline
- * @param {number} time - Time in seconds to seek to
+ * Handle seek to a specific playhead in seconds
+ * @param {number} playhead - Time in seconds to seek to
  */
-function handleSeek(time) {
+function handleSeek(playhead) {
     const state = videoSynchronizer.getState();
-
-    // Convert absolute time to playhead position (0-1)
-    const playhead = Math.max(0, Math.min(1, time / state.duration));
-    videoSynchronizer.seekToPosition(playhead);
+    const safePlayhead = Math.max(0, Math.min(state.duration, playhead));
+    videoSynchronizer.seek(safePlayhead);
     
     // Notify remote peer
     remoteSyncManager?.sendCommand({
-        type: 'seekTo',
+        type: 'seek',
         timestamp: Date.now(),
-        position: playhead
+        playhead: safePlayhead
     });
 }
 
 /**
- * Handle relative seek from current position
+ * Handle relative seek from current playhead
  * @param {number} seconds - Number of seconds to seek (positive or negative)
  */
 function handleSeekRelative(seconds) {
     const state = videoSynchronizer.getState();
-    const currentTime = state.playhead * state.duration;
-    const newTime = Math.max(0, Math.min(state.duration, currentTime + seconds));
-    const newPlayhead = state.duration > 0 ? newTime / state.duration : 0;
-    
-    videoSynchronizer.seekToPosition(newPlayhead);
+    const newPlayhead = Math.max(0, Math.min(state.duration, state.playhead + seconds));
+    videoSynchronizer.seek(newPlayhead);
     
     // Notify remote peer
     remoteSyncManager?.sendCommand({
-        type: 'seekTo',
+        type: 'seek',
         timestamp: Date.now(),
-        position: newPlayhead
+        playhead: newPlayhead
     });
 }
 
 // --- Remote Command Handlers ---
 /**
  * Handle play command from remote peer
- * @param {Object} command - Remote command with optional position
+ * @param {Object} command - Remote command with optional playhead
  */
 function handleReceivedPlay(command) {  
     // Only follow play commands if we're not already playing
@@ -217,17 +211,16 @@ function handleReceivedPlay(command) {
         videoSynchronizer.play();
     }
     
-    // If the command includes a position, seek to it
-    if (command.position !== undefined) {
-        // Ensure position is within valid range
-        const position = Math.max(0, Math.min(1, command.position));
-        videoSynchronizer.seekToPosition(position);
+    // If the command includes a playhead, seek to it
+    if (command.playhead !== undefined) {
+        const playhead = Math.max(0, Math.min(state.duration, command.playhead));
+        videoSynchronizer.seek(playhead);
     }
 }
 
 /**
  * Handle pause command from remote peer
- * @param {Object} command - Remote command with optional position
+ * @param {Object} command - Remote command with optional playhead
  */
 function handleReceivedPause(command) {
     // Only follow pause commands if we're playing
@@ -236,28 +229,24 @@ function handleReceivedPause(command) {
         videoSynchronizer.pause();
     }
     
-    // If the command includes a position, seek to it
-    if (command.position !== undefined) {
-        // Ensure position is within valid range
-        const position = Math.max(0, Math.min(1, command.position));
-        videoSynchronizer.seekToPosition(position);
+    // If the command includes a playhead, seek to it
+    if (command.playhead !== undefined) {
+        const playhead = Math.max(0, Math.min(state.duration, command.playhead));
+        videoSynchronizer.seek(playhead);
     }
 }
 
 /**
  * Handle seek command from remote peer
- * @param {Object} command - Remote command with position (0-1) and timestamp
+ * @param {Object} command - Remote command with playhead (seconds) and timestamp
  */
-function handleReceivedSeekTo(command) {
-    // Ensure position is within valid range
-    if (command.position !== undefined) {
-        const position = Math.max(0, Math.min(1, command.position));
+function handleReceivedSeek(command) {
+    // If the command includes a playhead, seek to it
+    if (command.playhead !== undefined) {
         const state = videoSynchronizer.getState();
-        
-        // Only seek if we're not already close to the target position
-        const positionDiff = Math.abs(state.playhead - position);
-        if (positionDiff > 0.01) { // Only seek if difference is more than 1%
-            videoSynchronizer.seekToPosition(position);
+        const diff = Math.abs(state.playhead - command.playhead);
+        if (diff > 0.1) { // 100ms threshold
+            videoSynchronizer.seek(command.playhead);
         }
     }
     
