@@ -80,6 +80,31 @@ body {
     justify-self: stretch;
 }
 
+/*.controlGrid .speaker-button {
+    position: relative;
+    font-size: xx-large;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+} */
+
+#left-audio-activate::before {
+    content: "\1F507";
+    display: inline-block;
+}
+#left-audio-activate.active::before {
+    content: "\1F56A";
+}
+
+#right-audio-activate::before {
+    content: "\1F507";
+    display: inline-block;
+}
+#right-audio-activate.active::before {
+    content: "\1F56A";
+}
+
 .controlGrid .playback-button {
     align-self: end;
 }

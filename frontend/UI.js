@@ -14,10 +14,13 @@ export class UI {
             scrubber: document.getElementById('scrubber'),
             scrubberThumb: document.getElementById('playhead-marker'),
             leftScrubber: document.getElementById('scrubber-left'),
-            rightScrubber: document.getElementById('scrubber-right')
+            rightScrubber: document.getElementById('scrubber-right'),
+            audioLocalBtn: document.getElementById('left-audio-activate'),
+            audioRemoteBtn: document.getElementById('right-audio-activate'),
         };
         
         this.scrubber = null;
+        this.isPlaying = false; // track current play state for event emission
         this.setupEventListeners();
     }
 
@@ -67,6 +70,7 @@ export class UI {
 
     // --- UI Update Methods ---
     updatePlayPauseButton(isPlaying) {
+        this.isPlaying = isPlaying;
         this.elements.playPauseBtn.textContent = isPlaying ? '⏸' : '▶';
     }
 
@@ -120,7 +124,7 @@ export class UI {
         this.scrubber = new Scrubber(this.elements, {
             duration: totalDuration,
             onSeek: (playheadSeconds) => {
-                bus.emit('seek', playheadSeconds);
+                bus.emit('localSeek', playheadSeconds);
             },
             seekDelay: 50, // Debounce seek events during drag for better performance
             localOffset: -localOffset, // Negative because we want to shift the thumbnail left
@@ -157,21 +161,25 @@ export class UI {
     
     // --- Event Listeners ---
     setupEventListeners() {
-        const { playPauseBtn, rewindBtn, forwardBtn, scrubber } = this.elements;
+        const { playPauseBtn, rewindBtn, forwardBtn, scrubber, audioLocalBtn, audioRemoteBtn, audioMuteBtn } = this.elements;
         
-        // Play/Pause
+        // Play / Pause toggle emits dedicated events
         playPauseBtn.addEventListener('click', () => {
-            bus.emit('playPause');
+            if (this.isPlaying) {
+                bus.emit('localPause');
+            } else {
+                bus.emit('localPlay');
+            }
         });
 
         // Seek backward
         rewindBtn.addEventListener('click', () => {
-            bus.emit('seekRelative', -10); // 10 seconds back
+            bus.emit('localSeekRelative', -10); // 10 seconds back
         });
 
         // Seek forward
         forwardBtn.addEventListener('click', () => {
-            bus.emit('seekRelative', 10); // 10 seconds forward
+            bus.emit('localSeekRelative', 10); // 10 seconds forward
         });
 
         // Scrubber hover delegation (thumb highlight only)
@@ -188,6 +196,29 @@ export class UI {
             }
         });
     
+        // Audio source toggles
+        audioLocalBtn?.addEventListener('click', () => {
+            // If already active, mute
+            if (audioLocalBtn.classList.contains('active')) {
+                bus.emit('localAudioChange', 'none');
+                this.#updateAudioButtons('none');
+            } else {
+                bus.emit('localAudioChange', 'local');
+                this.#updateAudioButtons('local');
+            }
+        });
+
+        audioRemoteBtn?.addEventListener('click', () => {
+            // If already active, mute
+            if (audioRemoteBtn.classList.contains('active')) {
+                bus.emit('localAudioChange', 'none');
+                this.#updateAudioButtons('none');
+            } else {
+                bus.emit('localAudioChange', 'remote');
+                this.#updateAudioButtons('remote');
+            }
+        });
+
         // Listen for players initialized event
         bus.on('playersInitialized', ({ playhead, duration, localConfig, remoteConfig }) => {
             if (!this.scrubber && duration > 0) {
@@ -196,6 +227,36 @@ export class UI {
                 this.updateTimeDisplay(playhead, duration);
             }
         });
+
+        // Reflect state changes coming from synchronizer
+        bus.on('stateChange', (state) => {
+            this.#updateAudioButtons(state.audioSource);
+            this.updatePlayPauseButton(state.state === 'playing');
+            this.updateTimeDisplay(state.playhead, state.duration);
+        });
+
+        // Handle remote audio changes to ensure UI stays in sync
+        bus.on('remoteAudioChange', (command) => {
+            if (command.track) {
+                // Map remote track to local audio source
+                const audioSource = command.track === 'local' ? 'remote' : 
+                                  command.track === 'remote' ? 'local' : 'none';
+                this.#updateAudioButtons(audioSource);
+            }
+        });
+    }
+
+    // --- Private Helpers ---
+    #updateAudioButtons(active) {
+        const { audioLocalBtn, audioRemoteBtn } = this.elements;
+        const btns = [audioLocalBtn, audioRemoteBtn];
+        btns.forEach(btn => btn.classList.remove('active'));
+        
+        if (active === 'local') {
+            audioLocalBtn.classList.add('active');
+        } else if (active === 'remote') {
+            audioRemoteBtn.classList.add('active');
+        }
     }
 
     // --- Cleanup ---

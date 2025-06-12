@@ -7,6 +7,11 @@
 import bus from './EventBus.js';
 
 export class VideoPlayerSynchronizer {
+    /**
+     * Timeout in milliseconds to wait for videos to be ready for playback
+    */
+     #PLAY_READY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+    
     // State
     state = 'paused'; // 'paused' | 'ready' | 'playing'
     audioSource = 'none'; // 'none' | 'local' | 'remote'
@@ -46,13 +51,13 @@ export class VideoPlayerSynchronizer {
     }
     
     /**
-     * Gets the position of the first shared frame in the unified timeline (0-1)
+     * Gets the position of the first shared frame in the unified timeline
      * @returns {number} Position of first shared frame in the unified timeline
      * @private
      */
-    #getFirstSharedFramePosition() {
+    getFirstSharedFramePosition() {
         const firstSharedTime = Math.max(this.#localStartTime, this.#remoteStartTime);
-        return (firstSharedTime - this.#timelineStart) / (this.#timelineEnd - this.#timelineStart);
+        return (firstSharedTime - this.#timelineStart) / 1000;
     }
     
     /**
@@ -83,19 +88,24 @@ export class VideoPlayerSynchronizer {
      */
     seek(playhead) {
         playhead = Math.max(0, Math.min(this.#totalDuration, playhead));
-        
+
+        // Any seek implicitly pauses playback to avoid drift
+        if (this.state === 'playing') {
+            this.pause(); // pause() already emits state change
+        }
+
         // Translate unified playhead → individual video currentTime values
         const localTime = this.getVideoTimeForUnified(playhead, 'local');
         const remoteTime = this.getVideoTimeForUnified(playhead, 'remote');
-        
+
         if (localTime <= this.localVideo.duration) {
             this.localVideo.currentTime = localTime;
         }
-        
+
         if (remoteTime <= this.remoteVideo.duration) {
             this.remoteVideo.currentTime = remoteTime;
         }
-        
+
         // Cache last playhead
         this.#lastPlayhead = playhead;
         this.#lastUpdateTime = performance.now();
@@ -210,11 +220,7 @@ export class VideoPlayerSynchronizer {
 
             this.#updateTimeline();
             
-            // Seek to the first shared frame
-            const firstSharedFramePos = this.#getFirstSharedFramePosition();
-            await this.seek(this.getUnifiedTimeFromVideo(firstSharedFramePos, 'local'));
-            
-            // Allow the part of the UI that requires video player information to initialize
+            // Let the SynchronizationEngine handle seeking to the first shared frame
             bus.emit('playersInitialized', {
                 playhead: this.getPlayhead(),
                 duration: this.#totalDuration,
@@ -291,6 +297,7 @@ export class VideoPlayerSynchronizer {
                 this.localVideo.readyState >= 3 && 
                 this.remoteVideo.readyState >= 3) {
                 this.state = 'ready';
+                this.#emitState();
             }
         };
 
@@ -334,51 +341,56 @@ export class VideoPlayerSynchronizer {
      * @returns {Promise<void>}
      */
     async playOnceReady() {
-        // If already playing, do nothing
         if (this.state === 'playing') {
             return;
         }
-        
-        // If a playOnceReady is already in progress, return that promise
+
         if (this.#playOnceReadyPromise) {
             return this.#playOnceReadyPromise;
         }
-        
-        // If ready, play immediately
+
         if (this.state === 'ready') {
             return this.play();
         }
-        
-        // Otherwise, wait for ready state
+
         this.#playOnceReadyPromise = new Promise((resolve, reject) => {
             const onStateChange = (state) => {
                 if (state.state === 'ready') {
-                    bus.off('stateChange', onStateChange);
+                    cleanup();
                     this.play().then(resolve).catch(reject);
                     this.#playOnceReadyPromise = null;
                 }
             };
-            
-            // Set a timeout to clean up if we never reach ready state
+
+            // Timeout after configured duration
             const timeout = setTimeout(() => {
-                bus.off('stateChange', onStateChange);
+                cleanup();
                 this.#playOnceReadyPromise = null;
                 reject(new Error('Timed out waiting for videos to be ready'));
-            }, 30000); // 30 second timeout
-            
-            // Listen for state changes via EventBus
-            bus.on('stateChange', onStateChange);
-            
-            // Clean up on promise resolution
-            this.#playOnceReadyPromise.finally(() => {
+            }, this.#PLAY_READY_TIMEOUT_MS);
+
+            const cleanup = () => {
                 clearTimeout(timeout);
                 bus.off('stateChange', onStateChange);
-            });
+            };
+
+            // Listen for future state changes
+            bus.on('stateChange', onStateChange);
+
+            // Edge-case: if the videos became ready before the listener was attached,
+            // check immediately and resolve without waiting for another event.
+            if (this.state === 'ready') {
+                onStateChange({ state: 'ready' });
+            }
         });
         
         return this.#playOnceReadyPromise;
     }
     
+    /**
+     * Play the videos
+     * @returns {Promise<void>}
+     */
     async play() {
         if (this.state === 'playing') return;
         
@@ -429,13 +441,16 @@ export class VideoPlayerSynchronizer {
     }
 
     switchAudio(source) {
-        if (source !== 'local' && source !== 'remote') {
-            throw new Error("Audio source must be either 'local' or 'remote'");
+        if (source !== 'local' && source !== 'remote' && source !== 'none') {
+            throw new Error("Audio source must be 'local', 'remote', or 'none'");
         }
-        
+
         this.audioSource = source;
         this.localVideo.muted = (source !== 'local');
         this.remoteVideo.muted = (source !== 'remote');
+        
+        // Emit state change to update UI
+        this.#emitState();
     }
 
     destroy() {
@@ -444,15 +459,6 @@ export class VideoPlayerSynchronizer {
             clearInterval(this.#syncInterval);
             this.#syncInterval = null;
         }
-        const handlers = {
-            play: () => this.play(),
-            pause: () => this.pause(),
-            seekto: (details) => {
-                if (details.seekTime !== undefined) {
-                    this.seek(details.seekTime);
-                }
-            }
-        };
     }
     
     // Get current state

@@ -52,7 +52,7 @@ CrossStream now uses a **single, centralized event bus** powered by the `mitt` l
 
 1. **User Interactions**
    - UI elements capture user input (clicks, drags, etc.).
-   - Handlers in `UI.js` emit semantic events on the **EventBus** such as `playPause`, `seek`, and `seekRelative`.
+   - Handlers in `UI.js` emit semantic events on the **EventBus** such as `localPlay`, `localPause`, `localSeek`, and `localSeekRelative`.
 
 2. **Player Commands**
    - `VideoPlayerSynchronizer` listens for these command events and invokes the appropriate actions (`play`, `pause`, `seek*`).
@@ -65,9 +65,14 @@ CrossStream now uses a **single, centralized event bus** powered by the `mitt` l
 
 | Event | Emitted By | Payload | Purpose |
 |-------|------------|---------|---------|
-| `playPause` | UI | *none* | Toggle between play and pause |
-| `seek` | UI | `playhead` (seconds) | Seek to absolute unified-timeline time |
-| `seekRelative` | UI | `delta` (seconds) | Seek relative to current playhead |
+| `localPlay` | UI | *none* | User pressed play |
+| `localPause` | UI | *none* | User pressed pause (also emitted before a scrubber seek) |
+| `localSeek` | UI/Scrubber | `playhead` (seconds) | Absolute seek while paused |
+| `localSeekRelative` | UI | `delta` (seconds) | ± seek buttons while paused |
+| `localAudioChange` | UI | `track` ('local'\|'remote'\|'none') | Switch active audio track (local / remote / mute) |
+| `remotePlay` | RemoteSyncManager | `{ playhead }` | Remote peer play |
+| `remotePauseSeek` | RemoteSyncManager | `{ playhead }` | Remote peer paused & sought (single message) |
+| `remoteAudioChange` | RemoteSyncManager | `{ track }` | Remote peer audio change (values: 'local'|'remote'|'none') |
 | `timeUpdate` | VideoPlayerSynchronizer | `playhead` (seconds), `duration` (s) | Continuous timeline updates |
 | `stateChange` | VideoPlayerSynchronizer | `{ state, playhead, duration }` | Changes in playback state |
 
@@ -109,6 +114,18 @@ The UI subsystem manages all user interface elements and interactions, serving a
 - Event delegation is used for dynamic elements
 - Heavy operations are debounced when appropriate
 - Event listeners are properly cleaned up on component destruction
+
+### Additional Audio Toggle Controls
+
+Additional audio toggle controls have been added:
+
+| Element | ID | Event Emitted |
+|---------|----|---------------|
+| Local audio button | `audioLocalButton` | `localAudioChange` `'local'` |
+| Remote audio button | `audioRemoteButton` | `localAudioChange` `'remote'` |
+| Mute button | `audioMuteButton` | `localAudioChange` `'none'` |
+
+The UI reflects current audio state via `stateChange` events by toggling an `.active` class on the buttons.
 
 ## Unified Timeline Concept
 
@@ -270,7 +287,6 @@ The VideoPlayerSynchronizer is responsible for maintaining frame-accurate synchr
 **Assumptions:**
 For the entirety of its lifetime, it can assume that both streams are available and valid. It doesn't need to deal with streams being added or removed.
 
-
 ### RemoteSyncManager
 
 The RemoteSyncManager handles peer discovery and communication between different client instances in a peer-to-peer fashion. It uses the Peer.js library to establish WebRTC data channels between clients, enabling real-time synchronization of video playback states.
@@ -298,36 +314,89 @@ The RemoteSyncManager handles peer discovery and communication between different
 - `disconnect()`: Closes all connections and cleans up resources
 - `sendCommand(command)`: Sends a playback command to the connected peer
 
-**Configuration Exchange Protocol:**
-1. Upon instantiation, the manager immediately attempts to connect to the specified session
-2. Once connected, it immediately sends its local configuration to the peer
-3. When a configuration is received:
-   - The `onConnectionEstablished` callback is triggered with the remote configuration
-   - The manager automatically responds by sending its local configuration (if not already sent)
-4. This exchange ensures both peers have each other's configuration
+**Command & Vector Clock Protocol:**
+After connection is established, peers exchange **vector-clocked** playback commands to ensure causal ordering and deterministic conflict resolution.
 
-**Command Protocol:**
-- After connection is established, peers exchange playback commands
-- Commands include:
-  - `{ type: 'play', time: number }`: Start playback at specified time
-  - `{ type: 'pause', time: number }`: Pause playback at specified time
-  - `{ type: 'seek', time: number }`: Seek to specified time
+Each command payload is augmented as follows:
 
-**Inputs:**
-- `localConfig` (object): Local stream configuration to share
-- `sessionId` (string): Target session ID to connect to
+```jsonc
+{
+  "type": "command",
+  "command": {
+    "type": "play" | "pause" | "seek" | "audioChange",   // operation
+    "position": number,               // unified playhead (for pause/seek)
+    "clock": { "<peerId>": number }, // vector clock map
+    "senderId": string                // peerId of originator
+  }
+}
+```
 
-**Outputs:**
-- Connection state changes (connected/disconnected/error)
-- Remote configuration updates via `onRemoteConfig`
-- Playback state synchronization events
-- Error events for connection issues
+Conflict resolution rules:
+1. If `clockA` **happens-before** `clockB`, apply `B`.
+2. If concurrent, apply the command whose `senderId` is lexicographically smaller (tie-break).
 
-**Assumptions:**
-- PeerJS server is available for initial peer connection establishment
-- Both peers have compatible WebRTC support in their browsers
-- Network conditions allow for peer-to-peer communication (or TURN servers are available)
-- Local configuration is valid and contains required stream information
+Minimal examples:
+* **Play**: `{ type: 'play', position: 12.3, … }`
+* **Pause**: `{ type: 'pause', position: 18.0, … }`
+* **Seek**: `{ type: 'seek', position: 45.7, … }`
+* **Audio Change**: `{ type: 'audioChange', track: 'remote' | 'local' | 'none', … }`
+
+### Synchronization Engine
+
+The **Synchronization Engine** is the top-level component that ensures two *sets* of video players—one local set on each peer—remain in **rough synchronization** across a peer-to-peer connection.
+
+**Responsibilities**
+
+* Maintain unified playback state (play/pause, unified playhead) across peers while tolerating small timing skew.
+* Propagate all user actions (play, pause, seek, rewind/fast-forward, audioChange) to the remote peer via `RemoteSyncManager`.
+* Resolve conflicting concurrent commands deterministically using vector clocks (implemented in `RemoteSyncManager`).
+* Delegate *in-browser* frame-accurate sync to `VideoPlayerSynchronizer` on each peer.
+
+**Design Principles**
+
+* *Peer Equality*: Both peers are equal—no master/slave. Any peer can initiate playback operations, and both must respond to incoming commands.
+* *Event Propagation*: All playback-affecting user actions (play, pause, seek, audio change, rewind/fast-forward) are immediately propagated to the other peer.
+* *Loose Consistency*: The goal is not perfect frame-accurate sync, but to keep both sides in the same logical state (playing/paused/position), tolerating minor network delays and conflicts.
+* *Conflict Resolution*: When conflicting commands occur (e.g., both pause and play at the same time), the system resolves to a single, shared state. Which state is chosen is less important than both peers ending up in the same state.
+* *Essential vs. Non-Essential Sync*: Only core playback state (play/pause/seek position) must be strictly synchronized. Non-essential controls (audio track selection, volume) can be loosely synchronized or even independent if needed for UX.
+* *Graceful Handling of Rapid Actions*: The engine must handle rapid, repeated commands (e.g., multiple rewinds) without causing desynchronization or erratic jumps.
+
+**Protocol Sketch**
+
+* **Play**: When a peer initiates play, it sends a play command with the current playhead position and timestamp. Both peers wait for their local video players to be ready (using the existing playWhenReady), then start playback together.
+* **Pause+Seek**: Any user pause, scrub, jump, or ± seek action results in a *single* `pauseSeek` command that carries the target unified playhead. Peers pause (if playing) and seek to the position.
+* **Audio Change**: Send an `audioChange` command with the new audio track (`'local'`, `'remote'`, or `'none'`). Receiving peer flips `'local'` ↔ `'remote'`; `'none'` mutes both.
+* **Command Batching**: If multiple commands are issued in rapid succession, batch or coalesce them before sending to avoid excessive network chatter.
+
+**Handling Simultaneous Commands**:
+
+* If both peers send conflicting commands at nearly the same time, each peer uses the **vector clock** comparison; if the clocks are concurrent, the command with the lexicographically smaller `senderId` wins (deterministic tie-break).
+
+**UX Considerations**
+
+* Always prioritize a smooth experience over perfect sync. Minor delays or differences are acceptable if they avoid jarring jumps or freezes.
+* Allow for leeway in sync (e.g., up to a few hundred milliseconds) to absorb network jitter.
+
+**Causal Ordering with Vector Clocks**
+
+`RemoteSyncManager` now stamps every outgoing command with an incremented vector clock (`clock`) and `senderId`. On receipt, the remote side compares the incoming clock with the last-applied clock:
+
+* **happens-before** → apply newer command
+* **concurrent** → tie-break via `senderId`
+
+The winning command is emitted on the global `EventBus` with event names prefixed by `remote` (e.g., `remotePlay`, `remotePauseSeek`, `remoteAudioChange`). The **Synchronization Engine** listens to these events to update local playback state accordingly.
+
+**Sequence Diagram**
+
+```
+Peer A UI  --> EventBus --> VideoPlayerSynchronizer --> RemoteSyncManager.sendCommand()
+                                                             | (vector-clocked cmd)
+Peer B RemoteSyncManager.handleIncomingCommand() -- EventBus.remoteCommand --> VideoPlayerSynchronizer --> UI
+```
+
+**Leeway & Skew Handling**
+
+If the unified playhead difference after any command is ≤ 250 ms, no corrective seek is issued to avoid jank. Larger deviations trigger an automatic seek before playback resumes.
 
 ## Data Flow
 
