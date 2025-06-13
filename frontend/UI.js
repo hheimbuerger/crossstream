@@ -75,6 +75,7 @@ export class UI {
     }
 
     updateTimeDisplay(playhead, duration) {
+        // console.log('updateTimeDisplay', playhead, duration);
         const currentTimeFormatted = this.formatTime(playhead);
         const durationFormatted = this.formatTime(duration || 0);   // FIXME: wtf is duration sometimes undefined, even though I definitely emit 0!???
         this.elements.timeDisplay.textContent = `${currentTimeFormatted} / ${durationFormatted}`;
@@ -210,14 +211,19 @@ export class UI {
 
         // Reflect state changes coming from synchronizer
         bus.on('stateChange', (state) => {
+            console.log('[State]', state.state);
             this.#updateAudioButtons(state.audioSource);
             this.updatePlayPauseButton(state.state === 'playing');
             this.updateTimeDisplay(state.playhead, state.duration);
+            if (this.scrubber)   // this actually requires a check because it might be emitted as part of the initial seek, in parallel to scrubber initialization
+                this.scrubber.updateTime(state.playhead);
         });
 
-        // Reflect state changes coming from synchronizer
-        bus.on('timeUpdate', (playhead, duration) => {
+        // Handle time updates during playback
+        bus.on('timeUpdate', ({playhead, duration}) => {
             this.updateTimeDisplay(playhead, duration);
+            if (this.scrubber)
+                this.scrubber.updateTime(playhead);
         });
 
         // Handle remote audio changes to ensure UI stays in sync

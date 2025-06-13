@@ -275,6 +275,7 @@ export class VideoPlayerSynchronizer {
 
     #setupEventListeners() {
         const updateReadyState = () => {
+            // console.log('updateReadyState', this.state, this.localVideo.readyState, this.remoteVideo.readyState);
             if (this.state === 'paused' && 
                 this.localVideo.readyState >= 3 && 
                 this.remoteVideo.readyState >= 3) {
@@ -284,7 +285,7 @@ export class VideoPlayerSynchronizer {
         };
 
         // Add event listeners for video ready state
-        const events = ['canplay'];
+        const events = ['canplay', 'seeked'];
         this._videoEventHandlers = events.map(event => {
             const handler = updateReadyState.bind(this);
             this.localVideo.addEventListener(event, handler);
@@ -296,7 +297,7 @@ export class VideoPlayerSynchronizer {
     #emitTimeUpdate() {
         const playhead = this.getPlayhead();
         // Emit via central event bus
-        bus.emit('timeUpdate', playhead, this.#totalDuration);
+        bus.emit('timeUpdate', {playhead: playhead, duration: this.#totalDuration});
     }
 
     #emitState() {
@@ -308,9 +309,6 @@ export class VideoPlayerSynchronizer {
             audioSource: this.audioSource,
             timeOffset: this.timeOffset
         };
-
-        this.#lastPlayhead = playhead;
-        this.#lastUpdateTime = performance.now();
 
         // Emit via central event bus
         bus.emit('stateChange', state);
@@ -425,7 +423,7 @@ export class VideoPlayerSynchronizer {
             this.#timeUpdateRaf = null;
         }
         this.#lastEmittedSecond = null;
-        if (this.state === 'paused') return;
+        if (this.state === 'paused' || this.state === 'ready') return;
         
         // Clear any pending playOnceReady
         if (this.#playOnceReadyPromise) {
@@ -436,7 +434,12 @@ export class VideoPlayerSynchronizer {
         this.localVideo.pause();
         this.remoteVideo.pause();
         
-        this.state = 'paused';
+        // If videos are still ready, go to 'ready' state, otherwise 'paused'
+        if (this.localVideo.readyState >= 3 && this.remoteVideo.readyState >= 3) {
+            this.state = 'ready';
+        } else {
+            this.state = 'paused';
+        }
         this.#emitState();
     }
 

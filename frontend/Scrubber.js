@@ -265,10 +265,10 @@ export class Scrubber {
 
     /**
      * Updates the scrubber thumb.
-     * @param {number} playheadSeconds - Playhead in seconds
+     * @param {number} playhead - Playhead in seconds
      */
-    updateTime(playheadSeconds) {
-        const ratio = playheadSeconds / this.duration;
+    updateTime(playhead) {
+        const ratio = playhead / this.duration;
         if (ratio < 0 || ratio > 1) return;
 
         // Update thumb
