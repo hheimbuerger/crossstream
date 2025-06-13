@@ -9,12 +9,12 @@ import bus from './EventBus.js';
 
 export class SynchronizationEngine {
     /**
-     * @param {Function} getVideoSynchronizer - () => VideoPlayerSynchronizer
-     * @param {Function} getRemoteSyncManager - () => RemoteSyncManager | null
+     * @param {Function} getDualVideoPlayer - () => DualVideoPlayer
+     * @param {Function} getPeerConnection - () => PeerConnection | null
      */
-    constructor(getVideoSynchronizer, getRemoteSyncManager) {
-        this.getVideoSynchronizer = getVideoSynchronizer;
-        this.getRemoteSyncManager = getRemoteSyncManager;
+    constructor(getDualVideoPlayer, getPeerConnection) {
+        this.getDualVideoPlayer = getDualVideoPlayer;
+        this.getPeerConnection = getPeerConnection;
 
         // Register LOCAL commands
         bus.on('localPlay', this.handleLocalPlay);
@@ -35,16 +35,16 @@ export class SynchronizationEngine {
     // --- Local Event Handlers ---------------------------------------------------
 
     handleLocalPlay = () => {
-        const vs = this.getVideoSynchronizer();
+        const vs = this.getDualVideoPlayer();
         if (!vs) return;
         const state = vs.getState();
         // Locally play when ready (handles buffering)
         vs.playOnceReady().catch(console.error);
-        this.getRemoteSyncManager()?.sendCommand({ type: 'play', playhead: state.playhead });
+        this.getPeerConnection()?.sendCommand({ type: 'play', playhead: state.playhead });
     };
 
     handleLocalPause = () => {
-        const vs = this.getVideoSynchronizer();
+        const vs = this.getDualVideoPlayer();
         if (!vs) return;
         const state = vs.getState();
         if (state.state === 'playing') {
@@ -54,7 +54,7 @@ export class SynchronizationEngine {
     };
 
     handleLocalSeek = (playhead) => {
-        const videoSynchronizer = this.getVideoSynchronizer();
+        const videoSynchronizer = this.getDualVideoPlayer();
         if (!videoSynchronizer) return;
         const state = videoSynchronizer.getState();
         const safePlayhead = Math.max(0, Math.min(state.duration, playhead));
@@ -63,7 +63,7 @@ export class SynchronizationEngine {
     };
 
     handleLocalSeekRelative = (seconds) => {
-        const videoSynchronizer = this.getVideoSynchronizer();
+        const videoSynchronizer = this.getDualVideoPlayer();
         if (!videoSynchronizer) return;
         const state = videoSynchronizer.getState();
         const newPlayhead = Math.max(0, Math.min(state.duration, state.playhead + seconds));
@@ -72,25 +72,25 @@ export class SynchronizationEngine {
     };
 
     handleLocalAudioChange = (track) => {
-        const vs = this.getVideoSynchronizer();
+        const vs = this.getDualVideoPlayer();
         if (!vs) return;
         if (!['local', 'remote', 'none'].includes(track)) {
             console.error('Invalid audio track', track);
             return;
         }
         vs.switchAudio(track);
-        this.getRemoteSyncManager()?.sendCommand({ type: 'audioChange', track });
+        this.getPeerConnection()?.sendCommand({ type: 'audioChange', track });
     };
 
     // helper
     _sendPauseSeek(playhead) {
-        this.getRemoteSyncManager()?.sendCommand({ type: 'pauseSeek', playhead });
+        this.getPeerConnection()?.sendCommand({ type: 'pauseSeek', playhead });
     }
 
     // --- Player Initialization Handler -----------------------------------------
 
     handlePlayersInitialized = async () => {
-        const vs = this.getVideoSynchronizer();
+        const vs = this.getDualVideoPlayer();
         if (!vs) return;
         
         // Get the first shared frame position and seek to it
@@ -98,7 +98,7 @@ export class SynchronizationEngine {
         await vs.seek(firstSharedFramePos);
         
         // Notify remote peer to seek to the same position
-        this.getRemoteSyncManager()?.sendCommand({
+        this.getPeerConnection()?.sendCommand({
             type: 'pauseSeek',
             playhead: firstSharedFramePos
         });
@@ -110,7 +110,7 @@ export class SynchronizationEngine {
         if (command.playhead === undefined) {
             throw new Error('Invalid remotePlay: missing playhead');
         }
-        const videoSynchronizer = this.getVideoSynchronizer();
+        const videoSynchronizer = this.getDualVideoPlayer();
         if (!videoSynchronizer) return;
         videoSynchronizer.playOnceReady().catch(console.error);
     };
@@ -119,7 +119,7 @@ export class SynchronizationEngine {
         if (command.playhead === undefined) {
             throw new Error('Invalid remotePauseSeek: missing playhead');
         }
-        const videoSynchronizer = this.getVideoSynchronizer();
+        const videoSynchronizer = this.getDualVideoPlayer();
         if (!videoSynchronizer) return;
         videoSynchronizer.seek(command.playhead); // seek pauses internally
     };
@@ -129,7 +129,7 @@ export class SynchronizationEngine {
         if (!track) {
             throw new Error('Invalid remoteAudioChange: missing track');
         }
-        const vs = this.getVideoSynchronizer();
+        const vs = this.getDualVideoPlayer();
         if (!vs) return;
         let localTrack;
         if (track === 'local') localTrack = 'remote';

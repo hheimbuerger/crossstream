@@ -1,12 +1,9 @@
 // --- Imports ---
-import { VideoPlayerSynchronizer } from './VideoPlayerSynchronizer.js';
-import { RemoteSyncManager } from './RemoteSyncManager.js';
+import { DualVideoPlayer } from './DualVideoPlayer.js';
+import { PeerConnection } from './PeerConnection.js';
 import { SynchronizationEngine } from './SynchronizationEngine.js';
 import { UI } from './UI.js';
 import bus from './EventBus.js';
-
-// --- Constants ---
-const SEEK_STEP = 10; // seconds for forward/backward seek
 
 // --- Constants ---
 // const SESSION_ID = 'crossstream-dev'; // Fixed session ID for now
@@ -14,35 +11,34 @@ const urlParams = new URLSearchParams(window.location.search);
 const SESSION_ID = urlParams.get('session');
 
 // --- State ---
-let localStreamConfig = null;
-let remoteSyncManager = null;
-let videoSynchronizer = null;
+let peerConnection = null;
+let dualVideoPlayer = null;
 let ui = null;
-let syncEngine = new SynchronizationEngine(() => videoSynchronizer, () => remoteSyncManager);
+let syncEngine = null;
 
-// --- RemoteSyncManager Setup ---
-function setupRemoteSyncManager() {
+// --- PeerConnection Setup ---
+function setupPeerConnection(localConfig) {
     ui.showLoading('Connecting to peer...');
     
     // Clean up any existing instances
-    if (remoteSyncManager) {
-        remoteSyncManager.disconnect();
-        remoteSyncManager = null;
+    if (peerConnection) {
+        peerConnection.disconnect();
+        peerConnection = null;
     }
     
     // Instantiate without callbacks (event bus will be used)
-    remoteSyncManager = new RemoteSyncManager(SESSION_ID, localStreamConfig);
+    peerConnection = new PeerConnection(SESSION_ID, localConfig);
 
-    // --- RemoteSyncManager Bus Listeners ---
+    // --- PeerConnection Bus Listeners ---
     const onPeerConfig = (remoteConfig) => {
         console.log('Connection established with remote peer');
         ui.hideLoading();
-        setupVideoSynchronizer(remoteConfig);
+        setupDualVideoPlayer(localConfig, remoteConfig);
     };
 
     const onSyncError = (error) => {
-        console.error('RemoteSyncManager error:', error);
-        if (!error.message.includes('Could not connect to peer') || remoteSyncManager.peer.id === SESSION_ID) {
+        console.error('PeerConnection error:', error);
+                if (!error.message.includes('Could not connect to peer') || peerConnection.peer.id === SESSION_ID) {
             ui.showError('Connection error: ' + error.message);
         }
         ui.hideLoading();
@@ -62,7 +58,7 @@ function setupRemoteSyncManager() {
     // SynchronizationEngine directly via EventBus registration, so no
     // explicit handler wiring is required here.
 
-    // Cleanup listeners when remoteSyncManager disconnects / app cleans up
+    // Cleanup listeners when peerConnection disconnects / app cleans up
     const cleanupRemoteBus = () => {
         bus.off('peerConfig', onPeerConfig);
         bus.off('syncError', onSyncError);
@@ -70,25 +66,25 @@ function setupRemoteSyncManager() {
     };
 
     // Store cleanup function
-    const originalDisconnect = remoteSyncManager.disconnect.bind(remoteSyncManager);
-    remoteSyncManager.disconnect = () => {
+    const originalDisconnect = peerConnection.disconnect.bind(peerConnection);
+    peerConnection.disconnect = () => {
         cleanupRemoteBus();
         originalDisconnect();
     };
 }
 
-// --- VideoSynchronizer Setup ---
-function setupVideoSynchronizer(remoteConfig) {
+// --- DualVideoPlayer Setup ---
+function setupDualVideoPlayer(localConfig, remoteConfig) {
     ui.showLoading('Initializing video player...');
     
     // Clean up existing synchronizer if any
-    videoSynchronizer?.destroy();
+    dualVideoPlayer?.destroy();
 
     try {
-        // Initialize the VideoPlayerSynchronizer with video elements and configs
-        videoSynchronizer = new VideoPlayerSynchronizer(
+                // Initialize the DualVideoPlayer with video elements and configs
+        dualVideoPlayer = new DualVideoPlayer(
             ui.elements.localVideo,
-            localStreamConfig,
+            localConfig,
             ui.elements.remoteVideo,
             remoteConfig
         );
@@ -100,7 +96,7 @@ function setupVideoSynchronizer(remoteConfig) {
         ui.updatePlayPauseButton(false);
         
     } catch (error) {
-        console.error('Failed to initialize video synchronizer:', error);
+        console.error('Failed to initialize dual video player:', error);
         ui.showError('Failed to initialize video playback: ' + error.message);
         ui.hideLoading();
     }
@@ -123,12 +119,12 @@ async function initializeApp() {
         // Initialize UI (event handling uses central EventBus now)
         ui = new UI();
         
-        // SynchronizationEngine already registered its handlers on the EventBus
-        // during instantiation, so no additional wiring is necessary here.
+        // set up SynchronizationEngine
+        syncEngine = new SynchronizationEngine(() => dualVideoPlayer, () => peerConnection);
 
-        // Load configuration
-        localStreamConfig = await loadConfig();
-        setupRemoteSyncManager();
+        // Load configuration and initialize peer connection
+        const localConfig = await loadConfig();
+        setupPeerConnection(localConfig);
         
         // Set up beforeunload handler
         window.addEventListener('beforeunload', cleanup);
@@ -143,13 +139,13 @@ async function initializeApp() {
 
 // --- Cleanup Functions ---
 function cleanup() {
-    // Clean up video synchronizer
-    videoSynchronizer.destroy();
-    videoSynchronizer = null;
+    // Clean up dual video player
+    dualVideoPlayer.destroy();
+    dualVideoPlayer = null;
     
-    // Clean up remote sync manager
-    remoteSyncManager.disconnect();
-    remoteSyncManager = null;
+    // Clean up peer connection
+    peerConnection.disconnect();
+    peerConnection = null;
     
     // Clean up UI (includes scrubber cleanup)
     ui.cleanup();

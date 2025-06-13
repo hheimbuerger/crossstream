@@ -1,12 +1,12 @@
 /**
- * RemoteSyncManager - Handles peer-to-peer connection and synchronization
+ * PeerConnection - Handles peer-to-peer connection and synchronization
  * using WebRTC via PeerJS.
  */
 import bus from './EventBus.js';
 
-export class RemoteSyncManager {
+export class PeerConnection {
     /**
-     * Creates a new RemoteSyncManager instance and connects to the specified session.
+     * Creates a new PeerConnection instance and connects to the specified session.
      * @param {string} sessionId - The session ID to connect to
      * @param {Object} localConfig - Local stream configuration to share with peers
      * @param {number} [maxCommandAge=2000] - Maximum age of commands to process (in milliseconds)

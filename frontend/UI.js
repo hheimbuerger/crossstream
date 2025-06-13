@@ -2,6 +2,9 @@ import { Scrubber } from './Scrubber.js';
 import bus from './EventBus.js';
 
 export class UI {
+    // Constants
+    static SEEK_STEP = 10; // seconds for forward/backward seek
+
     constructor() {
         // Initialize DOM elements
         this.elements = {
@@ -158,12 +161,12 @@ export class UI {
 
         // Seek backward
         rewindBtn.addEventListener('click', () => {
-            bus.emit('localSeekRelative', -10); // 10 seconds back
+            bus.emit('localSeekRelative', -UI.SEEK_STEP);
         });
 
         // Seek forward
         forwardBtn.addEventListener('click', () => {
-            bus.emit('localSeekRelative', 10); // 10 seconds forward
+            bus.emit('localSeekRelative', UI.SEEK_STEP);
         });
 
         // Scrubber hover delegation (thumb highlight only)

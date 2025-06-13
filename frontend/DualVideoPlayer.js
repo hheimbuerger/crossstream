@@ -1,12 +1,12 @@
 /**
- * VideoPlayerSynchronizer
+ * DualVideoPlayer
  * 
  * Handles frame-accurate synchronization between two HLS video streams.
  * Manages playback state, seeking, and audio routing between the streams.
  */
 import bus from './EventBus.js';
 
-export class VideoPlayerSynchronizer {
+export class DualVideoPlayer {
     /**
      * Timeout in milliseconds to wait for videos to be ready for playback
     */

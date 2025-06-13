@@ -1,9 +1,9 @@
-﻿rename the remote sync manager to peer connection. Rename VideoPlayerSynchronizer to DualVideoPlayer.
+[x] rename the remote sync manager to peer connection. Rename VideoPlayerSynchronizer to DualVideoPlayer.
 
 Change everything to TypeScript. Start with the architecture documentation.
 
 Factor out a new component called UnifiedTimeline. This wraps the fields `playhead` and `duration`.
-It is created inside and managed by the VideoPlayerSynchronizer
+It is created inside and managed by the DualVideoPlayer
 It's playersInitialized event on the event bus will contain it, and that's how the Scrubber will receive the duration in the future.
 
 
