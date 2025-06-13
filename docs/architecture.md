@@ -13,7 +13,7 @@ Key features include:
 
 The system uses a local-first approach where one video (typically the local stream) serves as the baseline, and other streams are synchronized relative to it. Remote streams can have different starting timestamps, which are automatically compensated for during playback.
 
-The user interface provides centralized controls including play/pause, ±30 second seek, and a timeline scrubber with thumbnail previews. All controls affect all synchronized video players simultaneously. Every interaction with the user interface is broadcast to all connected clients, which then apply the same changes to their respective video players.
+The user interface provides centralized controls including play/pause, seek controls, and a timeline scrubber with thumbnail previews. All controls affect all synchronized video players simultaneously. Every interaction with the user interface is broadcast to all connected clients, which then apply the same changes to their respective video players.
 
 ## Data Classes
 
@@ -46,7 +46,7 @@ A data class representing the configuration for a single video stream. This conf
 ## Event Handling
 
 ### Overview
-CrossStream now uses a **single, centralized event bus** powered by the `mitt` library. All components publish and subscribe to events exclusively through this `EventBus` instance. There are **no direct callback props** or bespoke event arrays inside components anymore.
+CrossStream uses a **single, centralized event bus** powered by the `mitt` library. All components publish and subscribe to events exclusively through this `EventBus` instance. There are **no direct callback props** or bespoke event arrays inside components anymore.
 
 ### Event Flow
 
@@ -55,10 +55,10 @@ CrossStream now uses a **single, centralized event bus** powered by the `mitt` l
    - Handlers in `UI.js` emit semantic events on the **EventBus** such as `localPlay`, `localPause`, `localSeek`, and `localSeekRelative`.
 
 2. **Player Commands**
-   - `VideoPlayerSynchronizer` listens for these command events and invokes the appropriate actions (`play`, `pause`, `seek*`).
+   - `DualVideoPlayer` listens for these command events and invokes the appropriate actions (`play`, `pause`, `seek*`).
 
 3. **State Updates**
-   - `VideoPlayerSynchronizer` emits playback state and timeline updates (`stateChange`, `timeUpdate`) on the **EventBus**. `playhead` is always expressed in seconds.
+   - `DualVideoPlayer` emits playback state and timeline updates (`stateChange`, `timeUpdate`) on the **EventBus**. `playhead` is always expressed in seconds.
    - UI components and any other interested module subscribe to these events to keep the interface in sync.
 
 ### Core Bus Events
@@ -70,11 +70,11 @@ CrossStream now uses a **single, centralized event bus** powered by the `mitt` l
 | `localSeek` | UI/Scrubber | `playhead` (seconds) | Absolute seek while paused |
 | `localSeekRelative` | UI | `delta` (seconds) | ± seek buttons while paused |
 | `localAudioChange` | UI | `track` ('local'\|'remote'\|'none') | Switch active audio track (local / remote / mute) |
-| `remotePlay` | RemoteSyncManager | `{ playhead }` | Remote peer play |
-| `remotePauseSeek` | RemoteSyncManager | `{ playhead }` | Remote peer paused & sought (single message) |
-| `remoteAudioChange` | RemoteSyncManager | `{ track }` | Remote peer audio change (values: 'local'|'remote'|'none') |
-| `timeUpdate` | VideoPlayerSynchronizer | `playhead` (seconds), `duration` (s) | Continuous timeline updates |
-| `stateChange` | VideoPlayerSynchronizer | `{ state, playhead, duration }` | Changes in playback state |
+| `remotePlay` | PeerConnection | `{ playhead }` | Remote peer play |
+| `remotePauseSeek` | PeerConnection | `{ playhead }` | Remote peer paused & sought (single message) |
+| `remoteAudioChange` | PeerConnection | `{ track }` | Remote peer audio change (values: 'local'|'remote'|'none') |
+| `timeUpdate` | DualVideoPlayer | `playhead` (seconds), `duration` (s) | Continuous timeline updates |
+| `stateChange` | DualVideoPlayer | `{ state, playhead, duration, audioSource }` | Changes in playback state |
 
 All new functionality must use these bus events; legacy callback fields have been removed.
 
@@ -89,7 +89,6 @@ The UI subsystem manages all user interface elements and interactions, serving a
    - Manages all DOM elements and their lifecycle
    - Handles UI state (loading, error states, etc.)
    - Coordinates with the Scrubber component
-   - Manages Media Session API integration
    - Handles all user input events
 
 2. **Scrubber Component**
@@ -117,15 +116,14 @@ The UI subsystem manages all user interface elements and interactions, serving a
 
 ### Additional Audio Toggle Controls
 
-Additional audio toggle controls have been added:
+Audio toggle controls are provided:
 
 | Element | ID | Event Emitted |
 |---------|----|---------------|
 | Local audio button | `audioLocalButton` | `localAudioChange` `'local'` |
 | Remote audio button | `audioRemoteButton` | `localAudioChange` `'remote'` |
-| Mute button | `audioMuteButton` | `localAudioChange` `'none'` |
 
-The UI reflects current audio state via `stateChange` events by toggling an `.active` class on the buttons.
+Mute behaviour: Deselecting the currently active audio button emits `localAudioChange` with `'none'`, effectively muting all audio.
 
 ## Unified Timeline Concept
 
@@ -220,81 +218,14 @@ The unified playhead represents the current playback position across the entire 
 
 ## Subsystems
 
-### Media Session API Integration
+### PeerConnection
 
-The Media Session API integration is handled by the VideoPlayerSynchronizer, which serves as the single source of truth for media state. This includes:
-
-- Media metadata (title, artist, album, artwork)
-- Playback state (playing/paused)
-- Position state (current time, duration)
-- Media key handling (play, pause, seek, etc.)
-
-**Responsibilities:**
-- Registering and managing media session action handlers
-- Updating media metadata and playback state
-- Handling media key events
-- Synchronizing media session state with actual player state
-
-**Methods:**
-- `setupMediaSessionHandlers()`: Sets up all media session action handlers
-- `updateMediaSessionMetadata()`: Updates media session metadata and state
-- `handleMediaSessionAction(action, details)`: Handles media session actions
-
-### Scrubber Component
-
-**Methods:**
-- `handleScrubberClick(event)`: Process click/tap events on the timeline
-- `handleScrubberHover(event)`: Handle hover events for preview
-- `updateThumbnails(localThumbnail, remoteThumbnail)`: Update thumbnail sources
-- `cleanup()`: Remove event listeners and clean up resources
-
-### VideoPlayerSynchronizer
-
-The VideoPlayerSynchronizer is responsible for maintaining frame-accurate synchronization between multiple video players. An instance is created when multiple video sources are registered, taking local and remote stream configurations as parameters.
-
-**Responsibilities:**
-- Calculate and manage time offsets between video streams based on their recording timestamps
-- Synchronize playback states (play/pause) across all video instances
-- Handle seeking operations while maintaining sync between streams
-- Manage audio routing between video sources
-- Coordinate buffering states to ensure smooth playback
-- Interface with HLS.js for adaptive streaming functionality
-
-**States:**
-- `paused`: Both video players are currently paused, with at least one not ready for immediate playback
-- `ready`: Both video players are paused but fully buffered and ready for immediate playback
-- `playing`: Both video players are actively playing back in sync
-
-**Methods:**
-- `constructor(localStreamConfig, remoteStreamConfig)`: Initializes the synchronizer with the given stream configurations
-- `play()`: Starts playback of all synchronized videos. Throws an exception if any video is not ready for playback
-- `pause()`: Pauses playback of all synchronized videos
-- `seekLocal(time)`: Seeks all videos to the appropriate synchronized position based on the local video timeline
-- `seekRemote(time)`: Seeks all videos to the appropriate synchronized position based on the remote video timeline
-- `switchAudio(source)`: Switches audio between 'local' and 'remote' video sources
-- `destroy()`: Cleans up resources including HLS instances and event listeners
-
-**Inputs:**
-- Local and remote stream configurations (containing stream URLs and timestamps)
-- Playback control commands (play, pause, seek)
-- Audio source selection
-
-**Outputs:**
-- Synchronized video playback across multiple elements
-- Playback state changes
-- Error events for synchronization issues
-
-**Assumptions:**
-For the entirety of its lifetime, it can assume that both streams are available and valid. It doesn't need to deal with streams being added or removed.
-
-### RemoteSyncManager
-
-The RemoteSyncManager handles peer discovery and communication between different client instances in a peer-to-peer fashion. It uses the Peer.js library to establish WebRTC data channels between clients, enabling real-time synchronization of video playback states.
+The PeerConnection handles peer discovery and communication between different client instances in a peer-to-peer fashion. It uses the Peer.js library to establish WebRTC data channels between clients, enabling real-time synchronization of video playback states.
 
 **Responsibilities:**
 - Establish and manage WebRTC peer connections within a session
 - Exchange stream configurations between peers
-- Relay playback commands (play, pause, seek) between connected clients
+- Relay playback commands (play, pauseSeek, audioChange) between connected clients
 - Handle connection lifecycle and error scenarios
 - Manage resource cleanup on disconnection
 
@@ -314,17 +245,13 @@ The RemoteSyncManager handles peer discovery and communication between different
 - `disconnect()`: Closes all connections and cleans up resources
 - `sendCommand(command)`: Sends a playback command to the connected peer
 
-**Command & Vector Clock Protocol:**
-After connection is established, peers exchange **vector-clocked** playback commands to ensure causal ordering and deterministic conflict resolution.
-
-Each command payload is augmented as follows:
-
+**Command Payload:**
 ```jsonc
 {
   "type": "command",
   "command": {
-    "type": "play" | "pause" | "seek" | "audioChange",   // operation
-    "position": number,               // unified playhead (for pause/seek)
+    "type": "play" | "pauseSeek" | "audioChange",   // operation
+    "playhead": number,               // unified playhead (for pauseSeek)
     "clock": { "<peerId>": number }, // vector clock map
     "senderId": string                // peerId of originator
   }
@@ -341,6 +268,46 @@ Minimal examples:
 * **Seek**: `{ type: 'seek', position: 45.7, … }`
 * **Audio Change**: `{ type: 'audioChange', track: 'remote' | 'local' | 'none', … }`
 
+
+### DualVideoPlayer
+
+The DualVideoPlayer is responsible for maintaining frame-accurate synchronization between a set of video players on the local peer. An instance is created when multiple video sources are registered, taking local and remote stream configurations as parameters.
+
+**Responsibilities:**
+- Calculate and manage time offsets between video streams based on their recording timestamps
+- Synchronize playback states (play/pause) across all video instances
+- Handle seeking operations while maintaining sync between streams
+- Manage audio routing between video sources
+- Coordinate buffering states to ensure smooth playback
+- Interface with HLS.js for adaptive streaming functionality
+
+**States:**
+- `paused`: Both video players are currently paused, with at least one not ready for immediate playback
+- `ready`: Both video players are paused but fully buffered and ready for immediate playback
+- `playing`: Both video players are actively playing back in sync
+
+**Methods:**
+- `constructor(localStreamConfig, remoteStreamConfig)`: Initializes the synchronizer with the given stream configurations
+- `play()`: Starts playback of all synchronized players. Throws if any player is not ready
+- `pause()`: Pauses playback of all synchronized players
+- `seek(playhead)`: Seeks the set of players to a unified timeline position (seconds)
+- `switchAudio(source)`: Switches audio between 'local' and 'remote' players, or mutes audio
+- `destroy()`: Cleans up resources including HLS instances and event listeners
+
+**Inputs:**
+- Local and remote stream configurations (containing stream URLs and timestamps)
+- Playback control commands (play, pauseSeek, seek)
+- Audio source selection
+
+**Outputs:**
+- Synchronized video playback across multiple elements
+- Playback state changes
+- Error events for synchronization issues
+
+**Assumptions:**
+For the entirety of its lifetime, it can assume that both streams are available and valid. It doesn't need to deal with streams being added or removed.
+
+
 ### Synchronization Engine
 
 The **Synchronization Engine** is the top-level component that ensures two *sets* of video players—one local set on each peer—remain in **rough synchronization** across a peer-to-peer connection.
@@ -348,9 +315,9 @@ The **Synchronization Engine** is the top-level component that ensures two *sets
 **Responsibilities**
 
 * Maintain unified playback state (play/pause, unified playhead) across peers while tolerating small timing skew.
-* Propagate all user actions (play, pause, seek, rewind/fast-forward, audioChange) to the remote peer via `RemoteSyncManager`.
-* Resolve conflicting concurrent commands deterministically using vector clocks (implemented in `RemoteSyncManager`).
-* Delegate *in-browser* frame-accurate sync to `VideoPlayerSynchronizer` on each peer.
+* Propagate all user actions (play, pause, seek, rewind/fast-forward, audioChange) to the remote peer via `PeerConnection`.
+* Resolve conflicting concurrent commands deterministically using vector clocks (implemented in `PeerConnection`).
+* Delegate *in-browser* frame-accurate sync to `DualVideoPlayer` on each peer.
 
 **Design Principles**
 
@@ -379,31 +346,20 @@ The **Synchronization Engine** is the top-level component that ensures two *sets
 
 **Causal Ordering with Vector Clocks**
 
-`RemoteSyncManager` now stamps every outgoing command with an incremented vector clock (`clock`) and `senderId`. On receipt, the remote side compares the incoming clock with the last-applied clock:
+`PeerConnection` now stamps every outgoing command with an incremented vector clock (`clock`) and `senderId`. On receipt, the remote side compares the incoming clock with the last-applied clock:
 
 * **happens-before** → apply newer command
 * **concurrent** → tie-break via `senderId`
 
 The winning command is emitted on the global `EventBus` with event names prefixed by `remote` (e.g., `remotePlay`, `remotePauseSeek`, `remoteAudioChange`). The **Synchronization Engine** listens to these events to update local playback state accordingly.
 
-**Sequence Diagram**
-
-```
-Peer A UI  --> EventBus --> VideoPlayerSynchronizer --> RemoteSyncManager.sendCommand()
-                                                             | (vector-clocked cmd)
-Peer B RemoteSyncManager.handleIncomingCommand() -- EventBus.remoteCommand --> VideoPlayerSynchronizer --> UI
-```
-
-**Leeway & Skew Handling**
-
-If the unified playhead difference after any command is ≤ 250 ms, no corrective seek is issued to avoid jank. Larger deviations trigger an automatic seek before playback resumes.
 
 ## Data Flow
 
 ### UI Data Flow
 1. User interacts with UI controls (play/pause, seek, etc.)
 2. UI translates interactions into player commands
-3. Commands are executed on the VideoPlayerSynchronizer
+3. Commands are executed on the DualVideoPlayer
 4. Player state changes trigger UI updates
 5. UI reflects the current state (play/pause button, time display, etc.)
 
@@ -412,12 +368,12 @@ If the unified playhead difference after any command is ≤ 250 ms, no correctiv
 2. Scrubber updates preview thumbnail and position
 3. User clicks/drags to seek
 4. Scrubber calculates target time and triggers seek
-5. VideoPlayerSynchronizer updates playback position
+5. DualVideoPlayer updates playback position
 6. UI updates to reflect the new position
 
 ### Cross-Component Communication
-- UI and Scrubber communicate through the VideoPlayerSynchronizer
-- All state changes flow through the VideoPlayerSynchronizer
+- UI and Scrubber communicate through the DualVideoPlayer
+- All state changes flow through the DualVideoPlayer
 - UI components observe player state and update accordingly
 
 ## Performance Considerations
@@ -437,3 +393,9 @@ If the unified playhead difference after any command is ≤ 250 ms, no correctiv
 - **Resource Release**: Release media resources when not in use (especially important for mobile devices)
 
 ## Future Extensions
+
+## Developer Logging Tips
+
+* Filter the browser console for the text `"SYNC"` to see concise peer-connection messages (`[SYNC IN]`, `[SYNC OUT]`, `[SYNC WARN]`).
+* Enable the **Verbose** log level (console filter dropdown) to view all EventBus traffic; each bus emission is prefixed with `[EventBus]`.
+* Use console search (`Ctrl+F`) with terms like `remotePauseSeek` or `vector clock` to inspect specific synchronisation events.
