@@ -54,10 +54,6 @@ function setupPeerConnection(localConfig) {
     bus.on('syncError', onSyncError);
     bus.on('peerDisconnected', onPeerDisconnected);
 
-    // Remote commands are now emitted with 'remote' prefix and consumed by
-    // SynchronizationEngine directly via EventBus registration, so no
-    // explicit handler wiring is required here.
-
     // Cleanup listeners when peerConnection disconnects / app cleans up
     const cleanupRemoteBus = () => {
         bus.off('peerConfig', onPeerConfig);
@@ -81,7 +77,7 @@ function setupDualVideoPlayer(localConfig, remoteConfig) {
     dualVideoPlayer?.destroy();
 
     try {
-                // Initialize the DualVideoPlayer with video elements and configs
+        // Initialize the DualVideoPlayer with video elements and configs
         dualVideoPlayer = new DualVideoPlayer(
             ui.elements.localVideo,
             localConfig,

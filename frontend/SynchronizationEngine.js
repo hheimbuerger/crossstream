@@ -1,9 +1,10 @@
-// SynchronizationEngine - High-level orchestration of local playback actions
-// and propagation to remote peer. It encapsulates the "handle*" helpers that
-// previously lived in player.js so that player.js focuses on wiring/UI.
-//
-// NOTE: This module currently preserves the existing imperative logic. It will
-// be refined later as the Synchronization Engine evolves.
+/**
+ * High-level orchestration of playback state between local video players, local UI and remote peers.
+ * 
+ * Listens for local UI events and forwards them to the DualVideoPlayer and remote peers.
+ * Handles remote commands by updating local playback state and resolving conflicts
+ * using vector clock comparison when concurrent commands are received.
+ */
 
 import bus from './EventBus.js';
 
@@ -35,50 +36,50 @@ export class SynchronizationEngine {
     // --- Local Event Handlers ---------------------------------------------------
 
     handleLocalPlay = () => {
-        const vs = this.getDualVideoPlayer();
-        if (!vs) return;
-        const state = vs.getState();
+        const dvp = this.getDualVideoPlayer();
+        if (!dvp) return;
+        const state = dvp.getState();
         // Locally play when ready (handles buffering)
-        vs.playOnceReady().catch(console.error);
+        dvp.playOnceReady();
         this.getPeerConnection()?.sendCommand({ type: 'play', playhead: state.playhead });
     };
 
     handleLocalPause = () => {
-        const vs = this.getDualVideoPlayer();
-        if (!vs) return;
-        const state = vs.getState();
+        const dvp = this.getDualVideoPlayer();
+        if (!dvp) return;
+        const state = dvp.getState();
         if (state.state === 'playing') {
-            vs.pause();
+            dvp.pause();
         }
         this._sendPauseSeek(state.playhead);
     };
 
     handleLocalSeek = (playhead) => {
-        const videoSynchronizer = this.getDualVideoPlayer();
-        if (!videoSynchronizer) return;
-        const state = videoSynchronizer.getState();
+        const dvp = this.getDualVideoPlayer();
+        if (!dvp) return;
+        const state = dvp.getState();
         const safePlayhead = Math.max(0, Math.min(state.duration, playhead));
-        videoSynchronizer.seek(safePlayhead);
+        dvp.seek(safePlayhead);
         this._sendPauseSeek(safePlayhead);
     };
 
     handleLocalSeekRelative = (seconds) => {
-        const videoSynchronizer = this.getDualVideoPlayer();
-        if (!videoSynchronizer) return;
-        const state = videoSynchronizer.getState();
+        const dvp = this.getDualVideoPlayer();
+        if (!dvp) return;
+        const state = dvp.getState();
         const newPlayhead = Math.max(0, Math.min(state.duration, state.playhead + seconds));
-        videoSynchronizer.seek(newPlayhead);
+        dvp.seek(newPlayhead);
         this._sendPauseSeek(newPlayhead);
     };
 
     handleLocalAudioChange = (track) => {
-        const vs = this.getDualVideoPlayer();
-        if (!vs) return;
+        const dvp = this.getDualVideoPlayer();
+        if (!dvp) return;
         if (!['local', 'remote', 'none'].includes(track)) {
             console.error('Invalid audio track', track);
             return;
         }
-        vs.switchAudio(track);
+        dvp.switchAudio(track);
         this.getPeerConnection()?.sendCommand({ type: 'audioChange', track });
     };
 
@@ -89,13 +90,13 @@ export class SynchronizationEngine {
 
     // --- Player Initialization Handler -----------------------------------------
 
-    handlePlayersInitialized = async () => {
-        const vs = this.getDualVideoPlayer();
-        if (!vs) return;
+    handlePlayersInitialized = () => {
+        const dvp = this.getDualVideoPlayer();
+        if (!dvp) return;
         
         // Get the first shared frame position and seek to it
-        const firstSharedFramePos = vs.getFirstSharedFramePosition();
-        await vs.seek(firstSharedFramePos);
+        const firstSharedFramePos = dvp.getFirstSharedFramePosition();
+        dvp.seek(firstSharedFramePos);
         
         // Notify remote peer to seek to the same position
         this.getPeerConnection()?.sendCommand({
@@ -110,18 +111,18 @@ export class SynchronizationEngine {
         if (command.playhead === undefined) {
             throw new Error('Invalid remotePlay: missing playhead');
         }
-        const videoSynchronizer = this.getDualVideoPlayer();
-        if (!videoSynchronizer) return;
-        videoSynchronizer.playOnceReady().catch(console.error);
+        const dvp = this.getDualVideoPlayer();
+        if (!dvp) return;
+        dvp.playOnceReady();
     };
 
     handleRemotePauseSeek = (command) => {
         if (command.playhead === undefined) {
             throw new Error('Invalid remotePauseSeek: missing playhead');
         }
-        const videoSynchronizer = this.getDualVideoPlayer();
-        if (!videoSynchronizer) return;
-        videoSynchronizer.seek(command.playhead); // seek pauses internally
+        const dvp = this.getDualVideoPlayer();
+        if (!dvp) return;
+        dvp.seek(command.playhead); // seek pauses internally
     };
 
     handleRemoteAudioChange = (command) => {
@@ -129,12 +130,12 @@ export class SynchronizationEngine {
         if (!track) {
             throw new Error('Invalid remoteAudioChange: missing track');
         }
-        const vs = this.getDualVideoPlayer();
-        if (!vs) return;
+        const dvp = this.getDualVideoPlayer();
+        if (!dvp) return;
         let localTrack;
         if (track === 'local') localTrack = 'remote';
         else if (track === 'remote') localTrack = 'local';
         else localTrack = 'none';
-        vs.switchAudio(localTrack);
+        dvp.switchAudio(localTrack);
     };
 }
