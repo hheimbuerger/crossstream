@@ -9,64 +9,209 @@ export class PeerConnection {
      * Creates a new PeerConnection instance and connects to the specified session.
      * @param {string} sessionId - The session ID to connect to
      * @param {Object} localConfig - Local stream configuration to share with peers
-     * @param {number} [maxCommandAge=2000] - Maximum age of commands to process (in milliseconds)
      */
-    constructor(sessionId, localConfig, maxCommandAge = 2000) {
+    constructor(sessionId, localConfig) {
         this.sessionId = sessionId;
         this.localConfig = localConfig;
         this.peer = null;
         this.connection = null;
-        this.maxCommandAge = maxCommandAge;
-        // Vector clock for causal ordering
         this.vectorClock = {};
-        // Last applied command's vector clock for conflict resolution
         this.lastAppliedClock = null;
-        // Local peer ID will be assigned in the `open` callback
         this.peerId = null;
         this.lastAppliedSenderId = null;
+        this._destroying = false;
+        this._isHost = false;
+        this._pendingConnect = null;
+        this.initializePeerConnection();
+    }
 
-        // Initialize PeerJS with default configuration
-        this.peer = new Peer(sessionId || null);
+    async initializePeerConnection() {
+        // Step 1: Try as guest (random peer ID, connect to session ID)
+        await this._tryConnectWithRandomId();
+    }
 
-        // Handle peer open event
-        this.peer.on('open', (id) => {
-            console.log('Initialized with peer ID:', id);
-
-            // Save local peer ID and initialize vector clock entry
-            this.peerId = id;
-            this.vectorClock[id] = 0;
-
-            // Try to connect to the session
-            if (!this.sessionId) {
-                console.log('Attempting to connect to session:', 'crossstream-dev');
-                this.connection = this.peer.connect('crossstream-dev', {
-                    reliable: true,
-                    serialization: 'json'
+    async _tryConnectWithRandomId() {
+        this._isHost = false;
+        this._destroying = false;
+        console.log('[Peer] Opening with random peer ID');
+        this.peer = new Peer(undefined); // random peer id
+        let resolved = false;
+        let peerOpen;
+        try {
+            peerOpen = await new Promise((resolve, reject) => {
+                this.peer.on('open', (id) => {
+                    if (resolved) return;
+                    resolved = true;
+                    resolve(id);
                 });
-            }
+                this.peer.on('error', (err) => {
+                    if (resolved) return;
+                    resolved = true;
+                    reject(err);
+                });
+            });
+        } catch (err) {
+            this._handlePeerError(err);
+            return;
+        }
+        this.peerId = peerOpen;
+        this.vectorClock[this.peerId] = 0;
+        console.log(`[Peer] Attempting to connect to session peer: ${this.sessionId}`);
+        let connectTimeout;
+        let conn;
+        try {
+            conn = this.peer.connect(this.sessionId, {
+                reliable: true,
+                serialization: 'json'
+            });
+            await new Promise((resolve, reject) => {
+                let done = false;
+                connectTimeout = setTimeout(() => {
+                    if (!done) {
+                        done = true;
+                        reject(new Error('Peer connection timeout'));
+                    }
+                }, 3500);
+                conn.on('open', () => {
+                    if (!done) {
+                        done = true;
+                        clearTimeout(connectTimeout);
+                        resolve();
+                    }
+                });
+                conn.on('error', (err) => {
+                    if (!done) {
+                        done = true;
+                        clearTimeout(connectTimeout);
+                        reject(err);
+                    }
+                });
+                conn.on('close', () => {
+                    if (!done) {
+                        done = true;
+                        clearTimeout(connectTimeout);
+                        reject(new Error('Peer connection closed'));
+                    }
+                });
+            });
+        } catch (err) {
+            clearTimeout(connectTimeout);
+            console.log('[Peer] Could not connect to session peer, switching to host mode');
+            await this._shutdownPeer();
+            await this._tryHostMode();
+            return;
+        }
+        clearTimeout(connectTimeout);
+        this.establishConnection(conn, 'client')
+    }
 
-            this.setupDataChannel();
-        });
-
-        // Handle errors
-        this.peer.on('error', (err) => {
-            console.error('PeerJS error:', err);
-            bus.emit('syncError', err);
-        });
-
-        // Handle incoming connections (for when another peer joins)
+    async _tryHostMode() {
+        this._isHost = true;
+        console.log(`[Peer] Opening as host with peer ID: ${this.sessionId}`);
+        this.peer = new Peer(this.sessionId);
+        let resolved = false;
+        try {
+            await new Promise((resolve, reject) => {
+                this.peer.on('open', (id) => {
+                    if (resolved) return;
+                    resolved = true;
+                    this.peerId = id;
+                    this.vectorClock[id] = 0;
+                    resolve();
+                });
+                this.peer.on('error', (err) => {
+                    if (resolved) return;
+                    resolved = true;
+                    // If the error is 'ID is taken', try as client instead
+                    if (err && err.message && err.message.includes('is taken')) {
+                        console.log(`[Peer] Host ID '${this.sessionId}' is taken, attempting to connect as client.`);
+                        this._shutdownPeer().then(() => this._tryConnectWithRandomId());
+                        return;
+                    }
+                    reject(err);
+                });
+            });
+        } catch (err) {
+            this._handlePeerError(err);
+            return;
+        }
+        console.log('[Peer] Waiting for incoming connections as host');
         this.peer.on('connection', (conn) => {
-            console.log('Incoming connection from:', conn.peer);
-            this.connection = conn;
-            this.setupDataChannel();
-
-            // Emit connection event for any interested components
-            bus.emit('peerConnected', { peerId: conn.peer });
+            this.establishConnection(conn, 'host');
         });
     }
 
     /**
+     * Called when a connection is fully established as host or client.
+     * Sets up the data channel and emits lifecycle events.
+     *
+     * @param {Peer.DataConnection} conn - The PeerJS connection
+     * @param {'host'|'client'} type - Connection role
+     */
+    establishConnection(conn, type) {
+        console.log(`[Peer] Connected to session peer as ${type}`);
+        this.connection = conn;
+        this._wasConnected = true;
+        // Attach close/error handlers for lifecycle events
+        conn.on('close', () => {
+            if (this._wasConnected) {
+                console.log('[Peer] Connection closed gracefully');
+                bus.emit('peerDisconnected');
+                // Re-enter connection establishment flow after graceful disconnect
+                setTimeout(() => {
+                    console.log('[Peer] Re-entering connection establishment flow');
+                    this.initializePeerConnection();
+                }, 250);
+            }
+        });
+        conn.on('error', (err) => {
+            if (this._wasConnected) {
+                console.error('[Peer] Connection terminated unexpectedly:', err);
+                bus.emit('peerTerminated', err);
+            }
+        });
+        // Data channel setup
+        this.setupDataChannel();
+        // Immediately send config if connection is already open
+        if (conn.open) {
+            this.sendConfig();
+        } else {
+            conn.on('open', () => {
+                this.sendConfig();
+            });
+        }
+    }
+
+    async _shutdownPeer() {
+        this._destroying = true;
+        if (this.connection) {
+            try { this.connection.close(); } catch (e) {}
+            this.connection = null;
+        }
+        if (this.peer) {
+            try { this.peer.destroy(); } catch (e) {}
+            this.peer = null;
+        }
+    }
+
+    /**
+     * Handles PeerJS errors and emits 'peerTerminated' for ungraceful disconnects.
+     *
+     * @param {Error} err
+     */
+    _handlePeerError(err) {
+        console.error('PeerJS error:', err);
+        bus.emit('peerTerminated', err);
+    }
+
+    /**
      * Sets up the data channel for an established connection
+     * @private
+     */
+    /**
+     * Sets up the data channel for an established connection.
+     * Handles only data and command events.
+     * Connection open/close/error events are handled in establishConnection.
      * @private
      */
     setupDataChannel() {
@@ -78,17 +223,6 @@ export class PeerConnection {
             this.connectionTimeout = null;
         }
 
-        this.connection.on('open', () => {
-            console.log('Connection to peer established');
-            // Clear the timeout since we have a successful connection
-            if (this.connectionTimeout) {
-                clearTimeout(this.connectionTimeout);
-                this.connectionTimeout = null;
-            }
-            // Send our config to the remote peer
-            this.sendConfig();
-        });
-
         this.connection.on('data', (data) => {
             if (data.type === 'config') {
                 console.log('Received config from peer:', data.config);
@@ -98,24 +232,6 @@ export class PeerConnection {
                 this._log('IN', data.command);
                 this.handleIncomingCommand(data.command);
             }
-        });
-
-        this.connection.on('close', () => {
-            console.log('Connection to peer closed');
-            if (this.connectionTimeout) {
-                clearTimeout(this.connectionTimeout);
-                this.connectionTimeout = null;
-            }
-            bus.emit('peerDisconnected');
-        });
-
-        this.connection.on('error', (err) => {
-            console.error('Connection error:', err);
-            if (this.connectionTimeout) {
-                clearTimeout(this.connectionTimeout);
-                this.connectionTimeout = null;
-            }
-            bus.emit('syncError', err);
         });
     }
 

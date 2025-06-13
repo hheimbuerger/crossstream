@@ -31,33 +31,30 @@ function setupPeerConnection(localConfig) {
 
     // --- PeerConnection Bus Listeners ---
     const onPeerConfig = (remoteConfig) => {
-        console.log('Connection established with remote peer');
         ui.hideLoading();
         setupDualVideoPlayer(localConfig, remoteConfig);
     };
 
-    const onSyncError = (error) => {
-        console.error('PeerConnection error:', error);
-                if (!error.message.includes('Could not connect to peer') || peerConnection.peer.id === SESSION_ID) {
-            ui.showError('Connection error: ' + error.message);
-        }
+    // Handle ungraceful disconnects/errors
+    const onPeerTerminated = (error) => {
+        ui.showError('Connection lost unexpectedly: ' + error.message);
         ui.hideLoading();
+        cleanup();
     };
 
+    // Handle graceful disconnects
     const onPeerDisconnected = () => {
-        console.log('Connection to peer lost');
-        ui.showError('Connection to peer lost. Waiting for reconnection...');
+        ui.showError('Connection to peer closed. Waiting for reconnection...');
         cleanup();
     };
 
     bus.on('peerConfig', onPeerConfig);
-    bus.on('syncError', onSyncError);
+    bus.on('peerTerminated', onPeerTerminated);
     bus.on('peerDisconnected', onPeerDisconnected);
 
     // Cleanup listeners when peerConnection disconnects / app cleans up
     const cleanupRemoteBus = () => {
         bus.off('peerConfig', onPeerConfig);
-        bus.off('syncError', onSyncError);
         bus.off('peerDisconnected', onPeerDisconnected);
     };
 
@@ -123,7 +120,12 @@ async function initializeApp() {
         setupPeerConnection(localConfig);
         
         // Set up beforeunload handler
-        window.addEventListener('beforeunload', cleanup);
+        window.addEventListener('beforeunload', () => {
+            if (peerConnection) peerConnection.disconnect();
+        });
+        window.addEventListener('unload', () => {
+            if (peerConnection) peerConnection.disconnect();
+        });
 
     } catch (error) {
         console.error('Failed to initialize app:', error);

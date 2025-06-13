@@ -75,6 +75,8 @@ CrossStream uses a **single, centralized event bus** powered by the `mitt` libra
 | `remoteAudioChange` | PeerConnection | `{ track }` | Remote peer audio change (values: 'local'|'remote'|'none') |
 | `timeUpdate` | DualVideoPlayer | `playhead` (seconds), `duration` (s) | Continuous timeline updates |
 | `stateChange` | DualVideoPlayer | `{ state, playhead, duration, audioSource }` | Changes in playback state |
+| `peerDisconnected` | PeerConnection | *none* | Emitted only after a full connection was established and then closed gracefully (user-initiated or normal close). Used for graceful disconnects and UI cleanup/reconnection logic. |
+| `peerTerminated` | PeerConnection | `Error` | Emitted when the peer connection is lost ungracefully or due to an error (unexpected disconnect, error, or network failure). Used for UI error handling and cleanup. Listened for in Core.js. |
 
 All new functionality must use these bus events; legacy callback fields have been removed.
 
@@ -220,6 +222,16 @@ The unified playhead represents the current playback position across the entire 
 
 ### PeerConnection
 
+#### Host/Client Role Negotiation & Reconnection Algorithm
+
+- On startup, a peer attempts to connect as a **client** (random ID) to the session ID.
+- If connection fails (no host found), it attempts to become the **host** (using the session ID as its own ID).
+- If hosting fails due to 'ID is taken', it retries as a client.
+- If a connection is gracefully closed (`peerDisconnected`), the peer re-enters the connection establishment flow (tries to reconnect or self-host).
+- All terminology uses 'host' and 'client'.
+- Concise logging is performed for all connection attempts, role changes, and disconnects (using `[Peer] ...` prefix).
+- Event emission (`peerDisconnected`, `peerTerminated`, etc.) reflects connection lifecycle and is used by the UI/Core for cleanup and user feedback.
+
 The PeerConnection handles peer discovery and communication between different client instances in a peer-to-peer fashion. It uses the Peer.js library to establish WebRTC data channels between clients, enabling real-time synchronization of video playback states.
 
 **Responsibilities:**
@@ -236,14 +248,10 @@ The PeerConnection handles peer discovery and communication between different cl
 - `error`: Connection error state
 
 **Core Methods:**
-- `constructor(sessionId, localConfig, callbacks)`: Initializes and connects to a peer-to-peer session
-  - `sessionId`: Unique identifier for the session to join
-  - `localConfig`: The local stream configuration to share with peers
-  - `callbacks`: Object containing:
-    - `onConnectionEstablished(remoteConfig)`: Triggered when a connection to another peer is established
-    - `onCommand(command)`: Triggered when a playback command is received
-- `disconnect()`: Closes all connections and cleans up resources
-- `sendCommand(command)`: Sends a playback command to the connected peer
+- `constructor(sessionId, localConfig)`: Initializes and connects to a peer-to-peer session using the given session ID and local stream configuration.
+  - All communication between PeerConnection and other modules is handled via EventBus events (see Event Handling section), not via callbacks or direct function references.
+- `disconnect()`: Closes all connections and cleans up resources.
+- `sendCommand(command)`: Sends a playback command to the connected peer.
 
 **Command Payload:**
 ```jsonc

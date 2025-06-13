@@ -35,7 +35,7 @@ export class UI {
         
         // Remove any existing error messages
         const existingError = document.querySelector('.error-message');
-        existingError.remove();
+        if (existingError) existingError.remove();
         
         document.body.appendChild(errorDiv);
         
