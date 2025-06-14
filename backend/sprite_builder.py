@@ -3,11 +3,11 @@ import fractions
 import time
 
 
-def _run_ffprobe(*arguments):
-    result = subprocess.run(("ffprobe",) + arguments, capture_output=True)
+def _run_ffprobe(*arguments, cwd=None):
+    result = subprocess.run((cwd / "ffprobe",) + arguments, capture_output=True)
     return result.stdout
 
-def _determine_parameters(filename, parameters):
+def _determine_parameters(filename, parameters, cwd=None):
     timer = time.perf_counter()
     result = _run_ffprobe(
         "-v", "error",
@@ -15,12 +15,13 @@ def _determine_parameters(filename, parameters):
         "-show_entries", parameters,
         "-of", "default=noprint_wrappers=1:nokey=0",
         filename,
+        cwd=cwd
     ).decode('ascii').strip()
     print(f'  ffprobe time: {time.perf_counter() - timer:.2f}s')
     return {pair.split('=')[0].strip(): pair.split('=')[1].strip() for pair in result.split('\n')}
 
-def _probe_video(filename):
-    keyvals = _determine_parameters(filename, "format=duration:stream=r_frame_rate")
+def _probe_video(filename, cwd=None):
+    keyvals = _determine_parameters(filename, "format=duration:stream=r_frame_rate", cwd=cwd)
     duration = float(keyvals['duration'])
     numerator, denominator = keyvals['r_frame_rate'].split('/')
     fps = fractions.Fraction(numerator=int(numerator),
@@ -28,7 +29,7 @@ def _probe_video(filename):
     print(f'  duration: {duration}, fps: {fps}')
     return duration, fps
 
-def _build_thumbnail_sprite(input, output, seconds_per_shot, num_tiles, scale='128:72', debug=False):
+def _build_thumbnail_sprite(input, output, seconds_per_shot, num_tiles, scale='128:72', debug=False, cwd=None):
     debug_arguments = (
         '-hide_banner', '-loglevel', 'info', '-stats',
     ) if debug else ()
@@ -49,19 +50,19 @@ def _build_thumbnail_sprite(input, output, seconds_per_shot, num_tiles, scale='1
         output
     )
     timer = time.perf_counter()
-    results = subprocess.run(('ffmpeg',) + debug_arguments + arguments, capture_output=True)
+    results = subprocess.run((cwd / 'ffmpeg',) + debug_arguments + arguments, capture_output=True)
     print(f'  ffmpeg time: {time.perf_counter() - timer:.2f}s')
     return results.returncode == 0, results.stderr
 
-def build_sprite(video_path, sprite_path, seconds_per_thumbnail, thumbnail_height):
+def build_sprite(video_path, sprite_path, seconds_per_thumbnail, thumbnail_height, cwd=None):
     thumbnail_width = thumbnail_height / 9 * 16
-    duration, fps = _probe_video(video_path)
+    duration, fps = _probe_video(video_path, cwd=cwd)
 
     frame_interval = seconds_per_thumbnail * fps
     frame_count = int(duration * fps)
     num_tiles = int(frame_count // frame_interval)
 
-    result = _build_thumbnail_sprite(video_path, sprite_path, seconds_per_thumbnail, num_tiles, scale=f'{thumbnail_width}:{thumbnail_height}', debug=True)
+    result = _build_thumbnail_sprite(video_path, sprite_path, seconds_per_thumbnail, num_tiles, scale=f'{thumbnail_width}:{thumbnail_height}', debug=True, cwd=cwd)
     if not result:
         print('Error running ffmpeg:')
         print(result.stderr)

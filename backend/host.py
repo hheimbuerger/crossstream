@@ -17,7 +17,8 @@ SECONDS_PER_THUMBNAIL = 5.0
 TRANSCODER_FILENAME = 'tools/transcode-concurrency-1'
 
 
-FILENAME_REGEX = re.compile(r'Hunt (?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2}) (?P<hour>\d{2})-(?P<minute>\d{2})-(?P<second>\d{2})\.mkv')
+FILENAME_REGEX = re.compile(r'Hunt (?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2}) (?P<hour>\d{2})-(?P<minute>\d{2})-(?P<second>\d{2})\.mp4')
+# FILENAME_REGEX = re.compile(r'Hunt  Showdown (?P<year>\d{4})\.(?P<month>\d{2})\.(?P<day>\d{2}) - (?P<hour>\d{2})\.(?P<minute>\d{2})\.(?P<second>\d{2})(\.\d+)?\.mp4')
 
 
 last_message = None
@@ -221,8 +222,7 @@ def extract_file_creation_time(filepath):
 
 def run_transcode_in_background(port=8888):
     global transcode_proc
-    tools_dir = pathlib.Path('tools')
-    config_template = tools_dir / 'config.yaml.template'
+    config_template = TOOLS_DIR / 'config.yaml.template'
     config_file = MEDIA_DIR / 'transcode' / 'config.yaml'
     
     # Read the config template and write the config file
@@ -235,7 +235,7 @@ def run_transcode_in_background(port=8888):
     transcode_cmd = [TRANSCODER.name, 'serve', '--config', str(config_file.resolve())]
     transcode_proc = subprocess.Popen(
         transcode_cmd,
-        cwd=tools_dir,
+        cwd=TOOLS_DIR,
         shell=True
     )
 
@@ -278,6 +278,7 @@ split_host_port = lambda x: (x.split(':')[0], int(x.split(':')[1]))
 LOCAL_HOST, LOCAL_PORT = split_host_port(sys.argv[1])
 #REMOTE_HOST, REMOTE_PORT = split_host_port(sys.argv[2])
 MEDIA_DIR = pathlib.Path(sys.argv[2] if len(sys.argv) >= 3 else '.')
+TOOLS_DIR = pathlib.Path('tools')
 CACHE_DIR = pathlib.Path('cache')
 TRANSCODER_PORT = int(sys.argv[3]) if len(sys.argv) >= 4 else 8888
 TRANSCODER = pathlib.Path(TRANSCODER_FILENAME)
@@ -303,7 +304,13 @@ THUMBNAIL_SPRITE_PATH = CACHE_DIR / (VIDEO_PATH.stem + '.thumbnail.jpeg')
 if THUMBNAIL_SPRITE_PATH.is_file():
     print('  Found existing thumbnail sprite, using that.')
 else:
-    sprite_builder.build_sprite(VIDEO_PATH, THUMBNAIL_SPRITE_PATH, seconds_per_thumbnail=SECONDS_PER_THUMBNAIL, thumbnail_height=THUMBNAIL_WIDTH)
+    sprite_builder.build_sprite(
+        VIDEO_PATH, 
+        THUMBNAIL_SPRITE_PATH, 
+        seconds_per_thumbnail=SECONDS_PER_THUMBNAIL, 
+        thumbnail_height=THUMBNAIL_WIDTH,
+        cwd=TOOLS_DIR
+    )
     print('  Complete.')
 
 print()
