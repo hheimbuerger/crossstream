@@ -15,14 +15,28 @@ export class PeerConnection {
         this.localConfig = localConfig;
         this.peer = null;
         this.connection = null;
-        this.vectorClock = {};
-        this.lastAppliedClock = null;
         this.peerId = null;
-        this.lastAppliedSenderId = null;
         this._destroying = false;
         this._isHost = false;
         this._pendingConnect = null;
+        this._wasConnected = false;
+        this.resetVectorClock();
         this.initializePeerConnection();
+    }
+
+    /**
+     * Resets the vector clock and related state
+     * Should be called when initializing a new connection
+     */
+    resetVectorClock() {
+        this.vectorClock = {};
+        this.lastAppliedClock = null;
+        this.lastAppliedSenderId = null;
+        
+        // If we have a peerId, initialize our own vector clock entry
+        if (this.peerId) {
+            this.vectorClock[this.peerId] = 0;
+        }
     }
 
     async initializePeerConnection() {
@@ -35,6 +49,7 @@ export class PeerConnection {
         this._destroying = false;
         console.log('[Peer] Opening with random peer ID');
         this.peer = new Peer(undefined); // random peer id
+        this.resetVectorClock();
         let resolved = false;
         let peerOpen;
         try {
@@ -116,7 +131,7 @@ export class PeerConnection {
                     if (resolved) return;
                     resolved = true;
                     this.peerId = id;
-                    this.vectorClock[id] = 0;
+                    this.resetVectorClock();
                     resolve();
                 });
                 this.peer.on('error', (err) => {
@@ -192,6 +207,7 @@ export class PeerConnection {
             try { this.peer.destroy(); } catch (e) {}
             this.peer = null;
         }
+        // Don't reset peerId here as it's needed for reconnection
     }
 
     /**
