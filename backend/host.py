@@ -1,323 +1,129 @@
 import datetime
-import functools
-import sys
-import http, http.server
-import json
-import urllib, urllib.request, urllib.parse
 import pathlib
 import re
-import time
-import subprocess
+import signal
+import sys
+import urllib.parse
+import urllib.request
 
-from . import sprite_builder
+from flask import Flask, jsonify, send_from_directory, send_file
+
+from .transcoder import TranscoderManager
+from .video_manager import VideoManager
+from .sprite_builder import SpriteBuilder
 
 
+# Constants
+NAME = "CrossStream Backend"
+DEFAULT_PORT = 6001
+DEFAULT_TRANSCODER_PORT = 6002
 THUMBNAIL_WIDTH = 64
 SECONDS_PER_THUMBNAIL = 5.0
-TRANSCODER_FILENAME = 'tools/transcode-concurrency-1'
+TRANSCODER_STOP_TIMEOUT = 5.0
+TRANSCODER_FILENAME = 'tools/transcode-concurrency-1.exe'
 
 
-FILENAME_REGEX = re.compile(r'Hunt (?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2}) (?P<hour>\d{2})-(?P<minute>\d{2})-(?P<second>\d{2})\.mp4')
-# FILENAME_REGEX = re.compile(r'Hunt  Showdown (?P<year>\d{4})\.(?P<month>\d{2})\.(?P<day>\d{2}) - (?P<hour>\d{2})\.(?P<minute>\d{2})\.(?P<second>\d{2})(\.\d+)?\.mp4')
 
+def create_app(host, port, transcoder_port, thumbnail_width, seconds_per_thumbnail, video_manager, transcoder_manager):
+    """Create and configure the Flask application."""
+    app = Flask(NAME, static_folder='frontend', static_url_path='')
 
-last_message = None
-transcode_proc = None
+    @app.route('/')
+    def index():
+        return send_from_directory(app.static_folder, 'player.html')
 
-
-class MyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        self.routing_table = {
-            '/config': self.process_config,
-            '/thumbnail_sprite.jpeg': self.serve_thumbnail_sprite,
-            '/join': self.process_join,
-            '/status': self.process_status,
-            '/sync': self.process_sync,
-            '/stream': self.process_stream,
-            '/': 'player.html',
-        }
-
-        super().__init__(*args, directory='frontend', **kwargs)
-
-    def _router(self):
-        parsed_url = urllib.parse.urlparse(self.path)
-        query_parameters = urllib.parse.parse_qs(parsed_url.query)
-        route = self.routing_table.get(parsed_url.path)
-        # HACK: temporary support for matching partial path
-        if parsed_url.path.startswith('/stream'):
-            return self.routing_table['/stream'], query_parameters
-        return route, query_parameters
-
-    def _respond_success_json(self, data):
-        self.send_response(200)
-        self.send_header('Content-Type', 'application/json')
-        self.end_headers()
-        self.wfile.write(json.dumps(data).encode('utf-8'))
-        
-    def serve_thumbnail_sprite(self, query_parameters):
-        print('Serving thumbnail sprite')
-        with open(THUMBNAIL_SPRITE_PATH, 'rb') as f:
-            self.send_response(200)
-            self.send_header('Content-Type', 'image/jpeg')
-            self.end_headers()
-            self.wfile.write(f.read())
-
-    def process_config(self, query_parameters):
-        local_stream = f'{VOD_BASE_PATH}1080p.m3u8'
-        # local_stream = "test_videos/h/henrik.m3u8"
-        # local_stream = "stream/manifest"
-        # remote_stream = "test_videos/s/sebastian.m3u8"
-        # relative_path = str(thumbnail_sprite.relative_to(pathlib.Path())).replace('\\', '/')
-        # local_thumbnail_sprite = f'http://{LOCAL_HOST}:{LOCAL_PORT}/{relative_path}'
-        local_thumbnail_sprite = f'http://{LOCAL_HOST}:{LOCAL_PORT}/thumbnail_sprite.jpeg'
-        # remote_thumbnail_sprite = "test_videos/s/sebastian.jpeg"
-        offsetSeconds = 4.0   # should be: 30.02 - 11.18 = 19! ???
-
-        # self._respond_success_json({
-        #     'streams': [
-        #         local_stream,
-        #         remote_stream,
-        #     ],
-        #     'thumbnailSprites': [
-        #         local_thumbnail_sprite,
-        #         remote_thumbnail_sprite,
-        #     ],
-        #     'offsetSeconds': offsetSeconds,
-        #     'thumbnailSeconds': SECONDS_PER_THUMBNAIL,
-        #     'thumbnailPixelWidth': THUMBNAIL_WIDTH,
-        # })
-        self._respond_success_json({
-            'stream': local_stream,
-            'thumbnailSprite': local_thumbnail_sprite,
-            'timestamp': TIMESTAMP.isoformat(),
-            'thumbnailSeconds': SECONDS_PER_THUMBNAIL,
-            'thumbnailPixelWidth': THUMBNAIL_WIDTH,
+    @app.route('/config')
+    def get_config():
+        video_name = urllib.parse.quote(video_manager.video_path.name)
+        stream_url = f'http://{host}:{transcoder_port}/vod/{video_name}/1080p.m3u8'
+        thumbnail_url = f'http://{host}:{port}/thumbnail_sprite'
+        return jsonify({
+            'stream': stream_url,
+            'thumbnailSprite': thumbnail_url,
+            'timestamp': video_manager.timestamp.isoformat() if video_manager.timestamp else datetime.datetime.now().isoformat(),
+            'thumbnailSeconds': seconds_per_thumbnail,
+            'thumbnailPixelWidth': thumbnail_width,
         })
 
-    def process_join(self, query_parameters, payload):
-        remote_host = payload['remote_host']
-        remote_port = payload['remote_port']
-        filename = payload['video_filename']
-        timestamp = payload['timestamp']
+    @app.route('/thumbnail_sprite')
+    def serve_thumbnail_sprite():
+        thumbnail_path = video_manager.build_thumbnail_sprite(video_manager.video_path)
+        return send_file(thumbnail_path, mimetype='image/jpeg')
 
-    def process_stream(self, query_parameters):
-        timer = time.perf_counter()
+    return app
 
-        # pass the JIT stream segment requests through to the go-transcode instance
-        path_component = self.path[8:]
-        forward_url =  + ('1080p.m3u8' if path_component == 'manifest' else path_component)
-        headers = self.headers
-        headers.add_header('X-Forwarded-For', self.client_address[0])
-        req = urllib.request.Request(url=forward_url, headers=headers)
+def parse_arguments():
+    """Parse command line arguments."""
+    import argparse
+    parser = argparse.ArgumentParser(description='Run the CrossStream backend server.')
+    parser.add_argument('--host', type=str, required=True, help='Public address to send to peers (required)')
+    parser.add_argument('--bind', type=str, default='0.0.0.0', help='Local address to bind the server to (default: 0.0.0.0)')
+    parser.add_argument('--port', type=int, default=DEFAULT_PORT, help=f'Port to run the server on (default: {DEFAULT_PORT})')
+    parser.add_argument('--transcoder-port', type=int, default=DEFAULT_TRANSCODER_PORT, 
+                        help=f'Port for the transcoder (default: {DEFAULT_TRANSCODER_PORT})')
+    parser.add_argument('--media-dir', type=pathlib.Path, required=True, help='Directory containing media files')
+    args = parser.parse_args()
+    return args
 
-        # TODO: this entire terrible block just because Python decided that a 304 should raise an HTTPError...
-        status, headers, payload = None, None, None
-        try:
-            with urllib.request.urlopen(req, timeout=10) as r:
-                status = r.status
-                headers = r.headers
-                payload = r.read()
-        except urllib.error.HTTPError as e:
-            if e.status == 304:
-                status = e.status
-                headers = e.headers
-            else:
-                raise
+def main():
+    """Main entry point."""
+    args = parse_arguments()
 
-        # proxy status, headers and payload through
-        self.send_response(status)
-        for k, v in headers.items():
-            self.send_header(k, v)
-        self.end_headers()
-        if payload: self.wfile.write(payload)
-        print(f'Proxied stream segment in {time.perf_counter() - timer:.2f}s')
+    media_dir = pathlib.Path(args.media_dir)
+    tools_dir = pathlib.Path('tools')
+    cache_dir = pathlib.Path('cache')
 
-    def process_sync(self, query_parameters, payload):
-        # is remote call: store last message as new change request
-        if 'remote' in query_parameters:
-            global last_message
-            last_message = payload
-            print(f'Storing new message for pickup: {repr(last_message)}')
-
-        # is local call: pass message to the remote server
-        else:
-            remote_url = f'http://{REMOTE_HOST}:{REMOTE_PORT}/sync?remote=true'
-            print(f'Passing message to remote server {remote_url}: {repr(payload)}')
-            req = urllib.request.Request(method='POST', url=remote_url, data=json.dumps(payload).encode('utf-8'))
-            try:
-                with urllib.request.urlopen(req, timeout=5) as r:
-                    pass
-            # except TimeoutError:
-                # print('Could not reach remote server')
-            except urllib.error.URLError:
-                print('Could not reach remote server (URLError)')
-
-        # send response
-        self._respond_success_json({'received': 'ok'})
-
-    def process_status(self, query_parameters):
-        global last_message
-        self._respond_success_json(last_message or {})
-        last_message = None
-
-    # hack from https://stackoverflow.com/a/13354482/6278 to enable CORS on this server
-    def send_my_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-    def end_headers(self):
-        self.send_my_headers()
-        super().end_headers()
-
-    # GET handler
-    def do_GET(self):
-        route, query_parameters = self._router()
-
-        if isinstance(route, str):
-            self.path = route
-        elif route:
-            route(query_parameters)
-            return
-
-        # serve files from the filesystem
-        super().do_GET()
-
-    def do_POST(self):
-        # parse POST body
-        length = int(self.headers.get('content-length'))
-        data = self.rfile.read(length)
-        payload = json.loads(data.decode('utf-8'))
-
-        route, query_parameters = self._router()
-        if route:
-            return route(query_parameters, payload)
-
-        self.send_error(http.HTTPStatus.NOT_IMPLEMENTED, "Unsupported method (%r)" % self.command)
-        return
-
-
-def extract_geforce_experience_date(filename):
-    result = FILENAME_REGEX.match(filename)
-    values = {k: int(v) for k, v in result.groupdict().items()}
-    # values['microsecond'] = values['millisecond'] * (10**3 if len(result.groupdict()['millisecond'])==3 else 10**2)
-    # del values['millisecond']
-    return datetime.datetime(**values)
-
-
-def extract_file_creation_time(filepath):
-    """Extract creation time from file metadata on Windows.
-    
-    Args:
-        filepath: Path object or string representing the file
-        
-    Returns:
-        datetime: The creation time of the file
-    """
-    if isinstance(filepath, str):
-        filepath = pathlib.Path(filepath)
-    
-    # Get the creation time in seconds since epoch
-    creation_time = filepath.stat().st_ctime
-    # Convert to timezone-aware datetime in local timezone
-    return datetime.datetime.fromtimestamp(creation_time, tz=datetime.timezone.utc).astimezone()
-
-
-def run_transcode_in_background(port=8888):
-    global transcode_proc
-    config_template = TOOLS_DIR / 'config.yaml.template'
-    config_file = MEDIA_DIR / 'transcode' / 'config.yaml'
-    
-    # Read the config template and write the config file
-    with open(config_template, 'r') as f:
-        config = f.read().format(media_dir=str(MEDIA_DIR.resolve()).replace('\\', '/'), transcoder_port=port)
-        with open(config_file, 'w') as out:
-            out.write(config)
-    
-    # Run the transcoder with tools directory as working directory
-    transcode_cmd = [TRANSCODER.name, 'serve', '--config', str(config_file.resolve())]
-    transcode_proc = subprocess.Popen(
-        transcode_cmd,
-        cwd=TOOLS_DIR,
-        shell=True
+    # Create managers
+    sprite_builder_manager = SpriteBuilder(tools_dir=tools_dir)
+    sprite_builder_manager.start()
+    video_manager = VideoManager(
+        media_dir=media_dir,
+        cache_dir=cache_dir,
+        tools_dir=tools_dir,
+        sprite_builder_manager=sprite_builder_manager,
+        thumbnail_width=THUMBNAIL_WIDTH,
+        seconds_per_thumbnail=SECONDS_PER_THUMBNAIL
+    )
+    transcoder_manager = TranscoderManager(
+        tools_dir=tools_dir,
+        media_dir=media_dir,
+        transcoder_port=args.transcoder_port,
+        stop_timeout=TRANSCODER_STOP_TIMEOUT
     )
 
+    try:
+        # Start transcoder
+        print("Starting transcoder...")
+        transcoder_manager.start()
 
-def determine_latest_video_legacy():
-    """Legacy function that finds the latest video based on the filename pattern."""
-    hunt_videos = [f for f in MEDIA_DIR.iterdir() if f.is_file() and FILENAME_REGEX.match(f.name)]
-    if not hunt_videos:
-        print('Error: No valid videos found in media directory!')
-        sys.exit(1)
-    newest_video = functools.reduce(
-        lambda x, y: x if extract_geforce_experience_date(x.name) > extract_geforce_experience_date(y.name) else y, 
-        hunt_videos
-    )
-    return newest_video
+        # Register signal handlers
+        def signal_handler(sig, frame):
+            print("\nShutting down gracefully...")
+            transcoder_manager.stop()
+            sys.exit(0)
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
 
+        # Find the latest video and build its thumbnail sprite
+        video_path = video_manager.find_latest_video()
+        if not video_path or not video_path.exists():
+            raise FileNotFoundError(f"No valid video file found in {media_dir}")
+        video_manager.build_thumbnail_sprite(video_path)
 
-def determine_latest_video():
-    """Find the most recently created video file based on filesystem metadata."""
-    # Get all video files (you might want to add more video extensions)
-    video_extensions = {'.mp4', '.mov', '.avi', '.mkv', '.wmv'}
-    video_files = [f for f in MEDIA_DIR.iterdir() if f.is_file() and f.suffix.lower() in video_extensions]
-    
-    if not video_files:
-        print('Error: No video files found in media directory!')
-        sys.exit(1)
-        
-    # Find the most recently created video
-    newest_video = max(video_files, key=lambda f: f.stat().st_ctime)
-    print(f'Using most recently created video: {newest_video.name} (created: {extract_file_creation_time(newest_video).isoformat()})')
-    return newest_video
+        # Create and run Flask app
+        app = create_app(args.host, args.port, args.transcoder_port, THUMBNAIL_WIDTH, SECONDS_PER_THUMBNAIL, video_manager, transcoder_manager)
 
+        print(f"Starting server on http://{args.host}:{args.port}")
+        app.run(host=args.bind, port=args.port)
+    except KeyboardInterrupt:
+        print("\nShutdown requested by user")
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    finally:
+        transcoder_manager.stop()
+        sprite_builder_manager.stop()
+    return 0
 
-if len(sys.argv) < 2:
-    print('Syntax: python host.py external_ip:public_port [relative_path_to_video_directory [transcoder_port]]')
-    sys.exit(400)
-
-
-split_host_port = lambda x: (x.split(':')[0], int(x.split(':')[1]))
-LOCAL_HOST, LOCAL_PORT = split_host_port(sys.argv[1])
-#REMOTE_HOST, REMOTE_PORT = split_host_port(sys.argv[2])
-MEDIA_DIR = pathlib.Path(sys.argv[2] if len(sys.argv) >= 3 else '.')
-TOOLS_DIR = pathlib.Path('tools')
-CACHE_DIR = pathlib.Path('cache')
-TRANSCODER_PORT = int(sys.argv[3]) if len(sys.argv) >= 4 else 8888
-TRANSCODER = pathlib.Path(TRANSCODER_FILENAME)
-VIDEO_PATH = determine_latest_video_legacy()
-VIDEO_FILENAME = VIDEO_PATH.name
-TIMESTAMP = extract_geforce_experience_date(VIDEO_PATH.name)
-VOD_BASE_PATH = f'http://{LOCAL_HOST}:{TRANSCODER_PORT}/vod/{urllib.parse.quote(VIDEO_PATH.name)}/'
-print(f'LOCAL_HOST: ({LOCAL_HOST}, {LOCAL_PORT})')
-print(f'MEDIA_DIR: {MEDIA_DIR.resolve()}')
-print(f'TRANSCODER: {TRANSCODER.resolve()}')
-print(f'TRANSCODER_PORT: {TRANSCODER_PORT}')
-print(f'VIDEO: {VIDEO_PATH.resolve()}')
-print(f'TIMESTAMP: {TIMESTAMP.isoformat()}')
-print()
-
-print('Spawning on-demand transcoder...')
-run_transcode_in_background(TRANSCODER_PORT)
-time.sleep(1)      # let it print some initialization output here
-print()
-
-print('Building thumbnail sprite (may take a few seconds)...')
-THUMBNAIL_SPRITE_PATH = CACHE_DIR / (VIDEO_PATH.stem + '.thumbnail.jpeg')
-if THUMBNAIL_SPRITE_PATH.is_file():
-    print('  Found existing thumbnail sprite, using that.')
-else:
-    sprite_builder.build_sprite(
-        VIDEO_PATH, 
-        THUMBNAIL_SPRITE_PATH, 
-        seconds_per_thumbnail=SECONDS_PER_THUMBNAIL, 
-        thumbnail_height=THUMBNAIL_WIDTH,
-        cwd=TOOLS_DIR
-    )
-    print('  Complete.')
-
-print()
-try:
-    print(f'Running server on http://{LOCAL_HOST}:{LOCAL_PORT}/')
-    httpd = http.server.HTTPServer(('', LOCAL_PORT), MyHTTPRequestHandler)
-    httpd.serve_forever()
-finally:
-    if transcode_proc:
-        transcode_proc.kill()
+if __name__ == '__main__':
+    sys.exit(main())
