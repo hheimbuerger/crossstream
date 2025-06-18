@@ -65,51 +65,61 @@ ENCODER_CONFIGS = [
         "",
         "-c:v libx264 -preset veryfast -profile:v high -crf 23 -c:a aac -b:a 192k",
     ),
+    # (
+    #     "CPU (stock, but audio removed)",
+    #     "",
+    #     "-c:v libx264 -preset ultrafast -profile:v high -crf 23 -an",
+    # ),
     (
-        "CPU (ultrafast preset)",
+        "CPU (stock video, audio copied)",
+        "",
+        "-c:v libx264 -preset veryfast -profile:v high -crf 23 -c:a copy",
+    ),
+    (
+        "CPU (ultrafast video preset, audio encoded)",
         "",
         "-c:v libx264 -preset ultrafast -profile:v high -crf 23 -c:a aac -b:a 192k",
     ),
-    (
-        "CPU (stock, but audio removed)",
-        "",
-        "-c:v libx264 -preset ultrafast -profile:v high -crf 23 -an",
-    ),
-    (
-        "CPU (stock, audio copied)",
-        "",
-        "-c:v libx264 -preset ultrafast -profile:v high -crf 23 -c:a copy",
-    ),
-    (
-        "CPU (stock, opus audio)",
-        "",
-        "-c:v libx264 -preset ultrafast -profile:v high -crf 23 -c:a libopus -preset veryfast -b:a 128k",
-    ),
+    # (
+    #     "CPU (stock, opus audio)",
+    #     "",
+    #     "-c:v libx264 -preset ultrafast -profile:v high -crf 23 -c:a libopus -preset veryfast -b:a 128k",
+    # ),
     (
         "NVENC (config recommendation I found in 2022)",
         "",
         "-c:v h264_nvenc -preset p1 -tune:v ull -profile:v high -rc:v cbr -b:v 5000k -c:a aac -b:a 192k",
     ),
     (
-        "NVENC (with hardware decoding)",
+        "NVENC (2022 config, half bitrate)",
+        "",
+        "-c:v h264_nvenc -preset p1 -tune:v ull -profile:v high -rc:v cbr -b:v 2500k -c:a aac -b:a 192k",
+    ),
+    (
+        "NVENC (2022 config, audio copied)",
+        "",
+        "-c:v h264_nvenc -preset p1 -tune:v ull -profile:v high -rc:v cbr -b:v 5000k -c:a copy",
+    ),
+    (
+        "NVENC (with nvdec)",
         "-hwaccel nvdec -hwaccel_device 0",
         "-c:v h264_nvenc -preset p1 -tune:v ull -profile:v high -rc:v cbr -b:v 5000k -c:a aac -b:a 192k",
     ),
-    (
-        "NVENC (threads 2, no idea what it does)",
-        "",
-        "-threads 2 -c:v h264_nvenc -preset p1 -tune:v ull -profile:v high -rc:v cbr -b:v 5000k -c:a aac -b:a 192k",
-    ),
-    (
-        "NVENC (threads 4, no idea what it does)",
-        "",
-        "-threads 4 -c:v h264_nvenc -preset p1 -tune:v ull -profile:v high -rc:v cbr -b:v 5000k -c:a aac -b:a 192k",
-    ),
-    (
-        "NVENC (2022 config, but audio removed)",
-        "",
-        "-c:v h264_nvenc -preset p1 -tune:v ull -profile:v high -rc:v cbr -b:v 5000k -an",
-    ),
+    # (
+    #     "NVENC (threads 2, no idea what it does)",
+    #     "",
+    #     "-threads 2 -c:v h264_nvenc -preset p1 -tune:v ull -profile:v high -rc:v cbr -b:v 5000k -c:a aac -b:a 192k",
+    # ),
+    # (
+    #     "NVENC (threads 4, no idea what it does)",
+    #     "",
+    #     "-threads 4 -c:v h264_nvenc -preset p1 -tune:v ull -profile:v high -rc:v cbr -b:v 5000k -c:a aac -b:a 192k",
+    # ),
+    # (
+    #     "NVENC (2022 config, but audio removed)",
+    #     "",
+    #     "-c:v h264_nvenc -preset p1 -tune:v ull -profile:v high -rc:v cbr -b:v 5000k -an",
+    # ),
 ]
 
 def build_ffmpeg_cmd(
@@ -179,14 +189,11 @@ def build_ffmpeg_cmd(
     return cmd
 
 
-def run_benchmark(input_path: str, configs=None, num_segments: int = DEFAULT_NUM_SEGMENTS, start_offset_sec: int = START_OFFSET_SEC):
+import statistics
+
+def run_benchmark(input_path: str, configs=None, num_segments: int = DEFAULT_NUM_SEGMENTS, start_offset_sec: int = START_OFFSET_SEC, repeat: int = 1):
     if configs is None:
         configs = ENCODER_CONFIGS
-    gpu = gpu_name()
-    if gpu:
-        print(f"{CYAN}GPU detected:{RESET} {gpu}")
-    else:
-        print(f"{CYAN}GPU detected:{RESET} none / nvidia-smi unavailable")
 
     # ensure ffmpeg exists
     if not shutil.which("ffmpeg"):
@@ -195,56 +202,118 @@ def run_benchmark(input_path: str, configs=None, num_segments: int = DEFAULT_NUM
     results = []
     for idx, (label, pre_input, post_input) in enumerate(configs, 1):
         print(f"\n{YELLOW}▶ Running configuration {idx}/{len(configs)}:{RESET} {label}")
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cmd = build_ffmpeg_cmd(input_path, pre_input, post_input, tmpdir, start_offset_sec=start_offset_sec, num_segments=num_segments)
-            start = time.perf_counter()
-            # Capture stderr to show errors
-            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-            first_seg_time = None
-            seg_pattern = os.path.join(tmpdir, "bench-*.ts")
-            while proc.poll() is None:
-                created = len(list(glob.glob(seg_pattern)))
-                if created and first_seg_time is None:
-                    first_seg_time = time.perf_counter() - start
-                bar_len = 20
-                filled = int((created / num_segments) * bar_len)
-                bar = "#" * filled + "-" * (bar_len - filled)
-                print(f"\rProgress [{bar}] {created}/{num_segments}", end="", flush=True)
-                time.sleep(0.3)
-            _, stderr = proc.communicate()
-            print()  # newline after progress bar
-            if proc.returncode != 0:
-                print(f"\n{Fore.RED}{'='*40}\nFFmpeg failed with exit code {proc.returncode}\n{stderr.strip()}\n{'='*40}{RESET}")
-                elapsed = None
+        elapsed_list = []
+        first_seg_list = []
+        mean_sizes_list = []
+        fail_count = 0
+        for run_idx in range(repeat):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                cmd = build_ffmpeg_cmd(input_path, pre_input, post_input, tmpdir, start_offset_sec=start_offset_sec, num_segments=num_segments)
+                start = time.perf_counter()
+                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
                 first_seg_time = None
-            else:
-                elapsed = time.perf_counter() - start
-                print(f"{GREEN}Finished in {elapsed:.2f} s{RESET}")
-            results.append((label, elapsed, first_seg_time))
+                seg_pattern = os.path.join(tmpdir, "bench-*.ts")
+                while proc.poll() is None:
+                    created = len(list(glob.glob(seg_pattern)))
+                    if created and first_seg_time is None:
+                        first_seg_time = time.perf_counter() - start
+                    bar_len = 20
+                    filled = int((created / num_segments) * bar_len)
+                    bar = "#" * filled + "-" * (bar_len - filled)
+                    print(f"\rRun {run_idx+1}/{repeat} Progress [{bar}] {created}/{num_segments}", end="", flush=True)
+                    time.sleep(0.3)
+                _, stderr = proc.communicate()
+                print()  # newline after progress bar
+                if proc.returncode != 0:
+                    print(f"\n{Fore.RED}{'='*40}\nFFmpeg failed with exit code {proc.returncode}\n{stderr.strip()}\n{'='*40}{RESET}")
+                    fail_count += 1
+                else:
+                    elapsed = time.perf_counter() - start
+                    segment_files = sorted(glob.glob(seg_pattern))
+                    if segment_files:
+                        sizes = [os.path.getsize(f) for f in segment_files]
+                        mean_size = sum(sizes) / len(sizes)
+                        print(f"{GREEN}Run {run_idx+1} finished in {elapsed:.2f} s, avg seg size: {mean_size/1024/1024:.1f} MB{RESET}")
+                        mean_sizes_list.append(mean_size)
+                    else:
+                        print(f"{GREEN}Run {run_idx+1} finished in {elapsed:.2f} s, avg seg size: -{RESET}")
+                        mean_sizes_list.append(None)
+                    elapsed_list.append(elapsed)
+                    first_seg_list.append(first_seg_time)
+        # Outlier/cold cache handling
+        use_elapsed = list(elapsed_list)
+        use_first_seg = list(first_seg_list)
+        use_sizes = list(mean_sizes_list)
+        if repeat > 3 and len(use_elapsed) > 1:
+            use_elapsed_drop = use_elapsed[1:]
+            use_first_seg = use_first_seg[1:]
+            use_sizes_drop = use_sizes[1:]
+        else:
+            use_elapsed_drop = use_elapsed
+            use_sizes_drop = use_sizes
+        # Median calculation
+        median_elapsed = statistics.median(use_elapsed_drop) if use_elapsed_drop else None
+        median_first_seg = statistics.median(use_first_seg) if use_first_seg else None
+        median_size = statistics.median([s for s in use_sizes_drop if s is not None]) if any(s is not None for s in use_sizes_drop) else None
+        total_time = sum(elapsed_list) if elapsed_list else None
+        results.append((label, median_elapsed, median_first_seg, total_time, median_size))
 
-    # Summary table
-    print("\n" + CYAN + "=== Benchmark Summary ===" + RESET)
-    pad = max(len(lbl) for lbl, _, _ in results) + 2
-    print(f"{'Config'.ljust(pad)} Total  | First")
-    print("-" * (pad + 15))
-    for lbl, elapsed, first_seg in results:
-        if elapsed is None:
+    # Return results for summary printing later
+    return results
+
+def print_summary_table(results, segment_count, repeat_count):
+    print(f"\n{CYAN}=== Benchmark Summary (Segments: {segment_count}, Repetitions: {repeat_count}) ==={RESET}")
+    pad = max(len(lbl) for lbl, _, _, _, _ in results) + 2
+    print(f"{'Config'.ljust(pad)} Median   | 1stSeg   | Total Time | Avg Seg Size")
+    print("-" * (pad + 47))
+    for lbl, median_elapsed, median_first_seg, total_time, median_size in results:
+        if median_elapsed is None:
             tot_str = f"{Fore.RED}FAIL{RESET}"
             first_str = "-"
+            total_str = "-"
+            size_str = "-"
         else:
-            tot_str = f"{GREEN}{elapsed:.2f}s{RESET}"
-            first_str = f"{first_seg:.2f}s" if first_seg else "-"
-        print(lbl.ljust(pad) + f" {tot_str:>6} | {first_str}")
+            tot_str = f"{GREEN}{median_elapsed:.2f}s{RESET}"
+            first_str = f"{median_first_seg:.2f}s" if median_first_seg else "-"
+            total_str = f"{total_time:.2f}s" if total_time is not None else "-"
+            size_str = f"{median_size/1024/1024:.1f} MB" if median_size is not None else "-"
+        print(lbl.ljust(pad) + f" {tot_str:>8} | {first_str:>8} | {total_str:>10} | {size_str:>11}")
 
+
+def parse_segments_arg(val):
+    if ',' in val:
+        return [int(v.strip()) for v in val.split(',') if v.strip()]
+    else:
+        return [int(val.strip())]
 
 def main():
     parser = argparse.ArgumentParser(description="Benchmark FFmpeg encoder settings defined in script.")
     parser.add_argument("input", help="input video file path")
-    parser.add_argument("-n", "--segments", type=int, default=DEFAULT_NUM_SEGMENTS, help="number of 4-second segments to encode (default 10)")
+    parser.add_argument("-n", "--segments", type=str, default=str(DEFAULT_NUM_SEGMENTS), help="number of 4-second segments to encode (default 10), or comma-separated list for multiple runs")
     parser.add_argument("-o", "--offset", type=int, default=START_OFFSET_SEC, help="start offset in seconds (default 300)")
+    parser.add_argument("-r", "--repeat", type=int, default=1, help="number of times to run each configuration (default 1)")
     args = parser.parse_args()
 
-    run_benchmark(args.input, num_segments=args.segments, start_offset_sec=args.offset)
+    if args.repeat < 1:
+        parser.error("--repeat must be >= 1")
+
+    gpu = gpu_name()
+    if gpu:
+        print(f"{CYAN}GPU detected:{RESET} {gpu}")
+    else:
+        print(f"{CYAN}GPU detected:{RESET} none / nvidia-smi unavailable")
+    print(f"{CYAN}Repetitions per config:{RESET} {args.repeat}")
+
+    segment_counts = parse_segments_arg(args.segments)
+    all_benchmark_runs = []
+    for seg_count in segment_counts:
+        print(f"\n{'='*20}\nBenchmarking with {seg_count} segments\n{'='*20}")
+        results = run_benchmark(args.input, num_segments=seg_count, start_offset_sec=args.offset, repeat=args.repeat)
+        all_benchmark_runs.append((seg_count, results))
+
+    # Print all summaries at the end
+    for seg_count, results in all_benchmark_runs:
+        print_summary_table(results, seg_count, args.repeat)
 
 
 if __name__ == "__main__":
