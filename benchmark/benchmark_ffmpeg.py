@@ -261,11 +261,67 @@ def run_benchmark(input_path: str, configs=None, num_segments: int = DEFAULT_NUM
     # Return results for summary printing later
     return results
 
-def print_summary_table(results, segment_count, repeat_count):
-    print(f"\n{CYAN}=== Benchmark Summary (Segments: {segment_count}, Repetitions: {repeat_count}) ==={RESET}")
-    pad = max(len(lbl) for lbl, _, _, _, _ in results) + 2
-    print(f"{'Config'.ljust(pad)} Median   | 1stSeg   | Total Time | Avg Seg Size")
-    print("-" * (pad + 47))
+def format_seconds(seconds):
+    """Format seconds with consistent alignment for numbers before decimal point."""
+    if seconds is None:
+        return "-"
+    # Calculate the width needed for the integer part
+    int_part = int(seconds)
+    int_width = len(f"{int_part}")
+    # Format with consistent decimal places
+    return f"{seconds:.2f}"
+
+def print_summary_table(results, segment_count, repeat_count, write_to_file=None):
+    """Print and optionally write benchmark results with proper alignment.
+    
+    Args:
+        results: List of (label, median_elapsed, median_first_seg, total_time, median_size)
+        segment_count: Number of segments processed
+        repeat_count: Number of repetitions
+        write_to_file: Optional file object to write the report to
+    """
+    # Calculate maximum width for each column
+    max_median_width = 8  # Default width for "Median"
+    max_first_seg_width = 8  # Default width for "1stSeg"
+    max_total_width = 10  # Default width for "Total Time"
+    
+    # Find maximum widths needed for alignment
+    for _, median_elapsed, median_first_seg, total_time, _ in results:
+        if median_elapsed is not None:
+            max_median_width = max(max_median_width, len(format_seconds(median_elapsed)) + 1)  # +1 for 's'
+            if median_first_seg is not None:
+                max_first_seg_width = max(max_first_seg_width, len(format_seconds(median_first_seg)) + 1)
+            if total_time is not None:
+                max_total_width = max(max_total_width, len(format_seconds(total_time)) + 1)
+    
+    # Add some padding
+    max_median_width = max(max_median_width, 8)
+    max_first_seg_width = max(max_first_seg_width, 8)
+    max_total_width = max(max_total_width, 10)
+    
+    # Prepare the header
+    header = f"=== Benchmark Summary (Segments: {segment_count}, Repetitions: {repeat_count}) ==="
+    
+    # Print to console with colors
+    print(f"\n{CYAN}{header}{RESET}")
+    
+    # Prepare format strings with dynamic widths
+    header_fmt = (f"{'Config':<{max(len(lbl) for lbl, _, _, _, _ in results) + 2}} "
+                 f"{'Median':>{max_median_width}} | "
+                 f"{'1stSeg':>{max_first_seg_width}} | "
+                 f"{'Total Time':>{max_total_width}} | "
+                 f"{'Avg Seg Size'}")
+    
+    print(header_fmt)
+    print("-" * len(header_fmt))
+    
+    # Write to file if specified
+    if write_to_file:
+        write_to_file.write(header + "\n")
+        write_to_file.write(header_fmt + "\n")
+        write_to_file.write("-" * len(header_fmt) + "\n")
+    
+    # Print each row
     for lbl, median_elapsed, median_first_seg, total_time, median_size in results:
         if median_elapsed is None:
             tot_str = f"{Fore.RED}FAIL{RESET}"
@@ -273,11 +329,28 @@ def print_summary_table(results, segment_count, repeat_count):
             total_str = "-"
             size_str = "-"
         else:
-            tot_str = f"{GREEN}{median_elapsed:.2f}s{RESET}"
-            first_str = f"{median_first_seg:.2f}s" if median_first_seg else "-"
-            total_str = f"{total_time:.2f}s" if total_time is not None else "-"
+            tot_str = f"{GREEN}{format_seconds(median_elapsed)}s{RESET}"
+            first_str = f"{format_seconds(median_first_seg)}s" if median_first_seg is not None else "-"
+            total_str = f"{format_seconds(total_time)}s" if total_time is not None else "-"
             size_str = f"{median_size/1024/1024:.1f} MB" if median_size is not None else "-"
-        print(lbl.ljust(pad) + f" {tot_str:>8} | {first_str:>8} | {total_str:>10} | {size_str:>11}")
+        
+        # Create the row with proper alignment
+        row = (f"{lbl.ljust(max(len(lbl) for lbl, _, _, _, _ in results) + 2)} "
+               f"{tot_str:>{max_median_width + len(GREEN) + len(RESET) if median_elapsed is not None else max_median_width}} | "
+               f"{first_str:>{max_first_seg_width}} | "
+               f"{total_str:>{max_total_width}} | "
+               f"{size_str:>11}")
+        
+        print(row)
+        
+        # Write to file without color codes
+        if write_to_file:
+            clean_row = (f"{lbl.ljust(max(len(lbl) for lbl, _, _, _, _ in results) + 2)} "
+                       f"{format_seconds(median_elapsed) + 's' if median_elapsed is not None else 'FAIL':>{max_median_width}} | "
+                       f"{first_str:>{max_first_seg_width}} | "
+                       f"{total_str:>{max_total_width}} | "
+                       f"{size_str:>11}")
+            write_to_file.write(clean_row + "\n")
 
 
 def parse_segments_arg(val):
@@ -306,14 +379,34 @@ def main():
 
     segment_counts = parse_segments_arg(args.segments)
     all_benchmark_runs = []
-    for seg_count in segment_counts:
-        print(f"\n{'='*20}\nBenchmarking with {seg_count} segments\n{'='*20}")
-        results = run_benchmark(args.input, num_segments=seg_count, start_offset_sec=args.offset, repeat=args.repeat)
-        all_benchmark_runs.append((seg_count, results))
-
-    # Print all summaries at the end
-    for seg_count, results in all_benchmark_runs:
-        print_summary_table(results, seg_count, args.repeat)
+    
+    # Open report file for writing
+    with open('report.txt', 'w') as report_file:
+        # Write GPU info and repetitions to the report file
+        if gpu:
+            report_file.write(f"GPU: {gpu}\n")
+        else:
+            report_file.write("GPU: none / nvidia-smi unavailable\n")
+        report_file.write(f"Repetitions: {args.repeat}\n\n")
+        
+        # Run all benchmarks
+        for seg_count in segment_counts:
+            print(f"\n{'='*20}\nBenchmarking with {seg_count} segments\n{'='*20}")
+            results = run_benchmark(args.input, num_segments=seg_count, start_offset_sec=args.offset, repeat=args.repeat)
+            all_benchmark_runs.append((seg_count, results))
+        
+        # Print all summaries at the end
+        for i, (seg_count, results) in enumerate(all_benchmark_runs):
+            print_summary_table(
+                results, 
+                seg_count, 
+                args.repeat, 
+                write_to_file=report_file
+            )
+            if i < len(all_benchmark_runs) - 1:  # Add blank line between tables, but not after last one
+                report_file.write("\n")
+    
+    print(f"\n{Fore.GREEN}Report saved to report.txt{RESET}")
 
 
 if __name__ == "__main__":
