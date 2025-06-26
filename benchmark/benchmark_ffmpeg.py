@@ -281,22 +281,27 @@ def print_summary_table(results, segment_count, repeat_count, write_to_file=None
         write_to_file: Optional file object to write the report to
     """
     # Calculate maximum width for each column
-    max_median_width = 8  # Default width for "Median"
-    max_first_seg_width = 8  # Default width for "1stSeg"
+    max_median_width = 7  # Default width for "Median"
+    max_med_per_seg_width = 7  # Default width for "Med/seg"
+    max_first_seg_width = 7  # Default width for "1stSeg"
     max_total_width = 10  # Default width for "Total Time"
     
     # Find maximum widths needed for alignment
     for _, median_elapsed, median_first_seg, total_time, _ in results:
         if median_elapsed is not None:
             max_median_width = max(max_median_width, len(format_seconds(median_elapsed)) + 1)  # +1 for 's'
+            # Calculate median per segment for width
+            med_per_seg = median_elapsed / segment_count if segment_count > 0 else 0
+            max_med_per_seg_width = max(max_med_per_seg_width, len(f"{med_per_seg:.2f}s") + 1)
             if median_first_seg is not None:
                 max_first_seg_width = max(max_first_seg_width, len(format_seconds(median_first_seg)) + 1)
             if total_time is not None:
                 max_total_width = max(max_total_width, len(format_seconds(total_time)) + 1)
     
     # Add some padding
-    max_median_width = max(max_median_width, 8)
-    max_first_seg_width = max(max_first_seg_width, 8)
+    max_median_width = max(max_median_width, 7)
+    max_med_per_seg_width = max(max_med_per_seg_width, 8)
+    max_first_seg_width = max(max_first_seg_width, 7)
     max_total_width = max(max_total_width, 10)
     
     # Prepare the header
@@ -308,6 +313,7 @@ def print_summary_table(results, segment_count, repeat_count, write_to_file=None
     # Prepare format strings with dynamic widths
     header_fmt = (f"{'Config':<{max(len(lbl) for lbl, _, _, _, _ in results) + 2}} "
                  f"{'Median':>{max_median_width}} | "
+                 f"{'Med/seg':>{max_med_per_seg_width}} | "
                  f"{'1stSeg':>{max_first_seg_width}} | "
                  f"{'Total Time':>{max_total_width}} | "
                  f"{'Avg Seg Size'}")
@@ -325,11 +331,14 @@ def print_summary_table(results, segment_count, repeat_count, write_to_file=None
     for lbl, median_elapsed, median_first_seg, total_time, median_size in results:
         if median_elapsed is None:
             tot_str = f"{Fore.RED}FAIL{RESET}"
+            med_per_seg_str = "-"
             first_str = "-"
             total_str = "-"
             size_str = "-"
         else:
             tot_str = f"{GREEN}{format_seconds(median_elapsed)}s{RESET}"
+            med_per_seg = median_elapsed / segment_count if segment_count > 0 else 0
+            med_per_seg_str = f"{med_per_seg:.2f}s"
             first_str = f"{format_seconds(median_first_seg)}s" if median_first_seg is not None else "-"
             total_str = f"{format_seconds(total_time)}s" if total_time is not None else "-"
             size_str = f"{median_size/1024/1024:.1f} MB" if median_size is not None else "-"
@@ -337,6 +346,7 @@ def print_summary_table(results, segment_count, repeat_count, write_to_file=None
         # Create the row with proper alignment
         row = (f"{lbl.ljust(max(len(lbl) for lbl, _, _, _, _ in results) + 2)} "
                f"{tot_str:>{max_median_width + len(GREEN) + len(RESET) if median_elapsed is not None else max_median_width}} | "
+               f"{med_per_seg_str:>{max_med_per_seg_width}} | "
                f"{first_str:>{max_first_seg_width}} | "
                f"{total_str:>{max_total_width}} | "
                f"{size_str:>11}")
@@ -347,6 +357,7 @@ def print_summary_table(results, segment_count, repeat_count, write_to_file=None
         if write_to_file:
             clean_row = (f"{lbl.ljust(max(len(lbl) for lbl, _, _, _, _ in results) + 2)} "
                        f"{format_seconds(median_elapsed) + 's' if median_elapsed is not None else 'FAIL':>{max_median_width}} | "
+                       f"{med_per_seg_str:>{max_med_per_seg_width}} | "
                        f"{first_str:>{max_first_seg_width}} | "
                        f"{total_str:>{max_total_width}} | "
                        f"{size_str:>11}")
