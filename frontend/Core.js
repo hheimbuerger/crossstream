@@ -8,7 +8,7 @@ import bus from './EventBus.js';
 // --- Constants ---
 // const SESSION_ID = 'crossstream-dev'; // Fixed session ID for now
 const urlParams = new URLSearchParams(window.location.search);
-const SESSION_ID = urlParams.get('session');
+const SESSION_ID = urlParams.get('session') || 'crossstream-dev';
 
 // --- State ---
 let peerConnection = null;
@@ -19,13 +19,13 @@ let syncEngine = null;
 // --- PeerConnection Setup ---
 function setupPeerConnection(localConfig) {
     ui.showLoading('Connecting to peer...');
-    
+
     // Clean up any existing instances
     if (peerConnection) {
         peerConnection.disconnect();
         peerConnection = null;
     }
-    
+
     // Instantiate without callbacks (event bus will be used)
     peerConnection = new PeerConnection(SESSION_ID, localConfig);
 
@@ -69,7 +69,7 @@ function setupPeerConnection(localConfig) {
 // --- DualVideoPlayer Setup ---
 function setupDualVideoPlayer(localConfig, remoteConfig) {
     ui.showLoading('Initializing video player...');
-    
+
     // Clean up existing synchronizer if any
     dualVideoPlayer?.destroy();
 
@@ -84,10 +84,10 @@ function setupDualVideoPlayer(localConfig, remoteConfig) {
 
         // Hide loading indicator now that setup is complete
         ui.hideLoading();
-        
+
         // Initialize UI with initial state
         ui.updatePlayPauseButton(false);
-        
+
     } catch (error) {
         console.error('Failed to initialize dual video player:', error);
         ui.showError('Failed to initialize video playback: ' + error.message);
@@ -111,14 +111,14 @@ async function initializeApp() {
     try {
         // Initialize UI (event handling uses central EventBus now)
         ui = new UI();
-        
+
         // set up SynchronizationEngine
         syncEngine = new SynchronizationEngine(() => dualVideoPlayer, () => peerConnection);
 
         // Load configuration and initialize peer connection
         const localConfig = await loadConfig();
         setupPeerConnection(localConfig);
-        
+
         // Set up beforeunload handler
         window.addEventListener('beforeunload', () => {
             if (peerConnection) peerConnection.disconnect();
@@ -140,11 +140,11 @@ function cleanup() {
     // Clean up dual video player
     dualVideoPlayer.destroy();
     dualVideoPlayer = null;
-    
+
     // Clean up peer connection
     peerConnection.disconnect();
     peerConnection = null;
-    
+
     // Clean up UI (includes scrubber cleanup)
     ui.cleanup();
     ui = null;
