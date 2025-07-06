@@ -1,0 +1,10 @@
+[project]
+name = "CrossStream"
+version = "0.1.0"
+description = "Synchronized side-by-side video player for instant collaborative review of concurrent screen recordings"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "flask>=3.1.1",
+    "textual>=3.6.0",
+]
