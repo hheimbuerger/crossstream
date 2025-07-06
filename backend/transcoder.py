@@ -6,10 +6,14 @@ import time
 from pathlib import Path
 from typing import Optional
 
+
 class TranscoderManager:
     """Manages the transcoder process lifecycle."""
     
-    def __init__(self, tools_dir: Path, media_dir: Path, transcoder_port: int, config_template: str = 'config.yaml.template', stop_timeout: float = 5.0):
+    def __init__(self, tools_dir: Path, media_dir: Path, transcoder_port: int,
+                 executable_name: str,
+                 config_template: str = 'config.yaml.template', stop_timeout: float = 5.0):
+        self.executable_name = Path(executable_name)
         self.tools_dir = tools_dir
         self.media_dir = media_dir
         self.transcoder_port = transcoder_port
@@ -40,9 +44,9 @@ class TranscoderManager:
         
         # Start the transcoder process without capturing output
         transcode_cmd = [
-            self.tools_dir / 'transcode-concurrency-1.exe',
+            self.tools_dir / self.executable_name,
             'serve',
-            '--config', config_file.resolve()
+            '--config', config_file.resolve(),
         ]
         
         print(f"Starting transcoder with command: {' '.join(str(c) for c in transcode_cmd)}")

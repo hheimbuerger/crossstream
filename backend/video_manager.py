@@ -37,7 +37,7 @@ class VideoManager:
         thumbnail_path = self.cache_dir / f"{video_path.stem}.thumbnail.jpeg"
         if not thumbnail_path.exists():
             self.cache_dir.mkdir(parents=True, exist_ok=True)
-            self.sprite_builder_manager.submit_job(
+            self.sprite_builder_manager.build_thumbnail_sprite(
                 str(video_path),
                 str(thumbnail_path),
                 self.seconds_per_thumbnail,

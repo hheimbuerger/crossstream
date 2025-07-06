@@ -75,7 +75,6 @@ def main():
 
     # Create managers
     sprite_builder_manager = SpriteBuilder(tools_dir=tools_dir)
-    sprite_builder_manager.start()
     video_manager = VideoManager(
         media_dir=media_dir,
         cache_dir=cache_dir,
@@ -88,6 +87,7 @@ def main():
         tools_dir=tools_dir,
         media_dir=media_dir,
         transcoder_port=args.transcoder_port,
+        executable_name=TRANSCODER_FILENAME,
         stop_timeout=TRANSCODER_STOP_TIMEOUT
     )
 
@@ -122,7 +122,6 @@ def main():
         return 1
     finally:
         transcoder_manager.stop()
-        sprite_builder_manager.stop()
     return 0
 
 if __name__ == '__main__':
