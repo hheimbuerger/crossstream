@@ -1,16 +1,18 @@
+import argparse
 import datetime
 import pathlib
-import re
-import signal
 import sys
 import urllib.parse
 import urllib.request
+import os
 
 from flask import Flask, jsonify, send_from_directory, send_file
 
 from .transcoder import TranscoderManager
 from .video_manager import VideoManager
 from .sprite_builder import SpriteBuilder
+
+from .tui import HostTUI
 
 
 # Constants
@@ -20,30 +22,52 @@ DEFAULT_TRANSCODER_PORT = 6002
 THUMBNAIL_WIDTH = 64
 SECONDS_PER_THUMBNAIL = 5.0
 TRANSCODER_STOP_TIMEOUT = 5.0
-TRANSCODER_FILENAME = 'tools/transcode-concurrency-1.exe'
-
+TRANSCODER_FILENAME = 'transcode-wip2025.exe'
 
 
 def create_app(host, port, transcoder_port, thumbnail_width, seconds_per_thumbnail, video_manager, transcoder_manager):
     """Create and configure the Flask application."""
-    app = Flask(NAME, static_folder='frontend', static_url_path='')
+    app = Flask(__name__)
+
+    # Ensure we have a video file before setting up routes
+    try:
+        video_path = video_manager.find_latest_video()
+        app.logger.info(f"Using video file: {video_path}")
+    except Exception as e:
+        app.logger.error(f"Failed to find video file: {e}")
+        raise
+
+    FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'frontend'))
 
     @app.route('/')
     def index():
-        return send_from_directory(app.static_folder, 'player.html')
+        return send_from_directory(FRONTEND_DIR, 'player.html')
+
+    @app.route('/<path:filename>')
+    def frontend_files(filename):
+        return send_from_directory(FRONTEND_DIR, filename)
 
     @app.route('/config')
     def get_config():
-        video_name = urllib.parse.quote(video_manager.video_path.name)
-        stream_url = f'http://{host}:{transcoder_port}/vod/{video_name}/1080p.m3u8'
-        thumbnail_url = f'http://{host}:{port}/thumbnail_sprite'
-        return jsonify({
-            'stream': stream_url,
-            'thumbnailSprite': thumbnail_url,
-            'timestamp': video_manager.timestamp.isoformat() if video_manager.timestamp else datetime.datetime.now().isoformat(),
-            'thumbnailSeconds': seconds_per_thumbnail,
-            'thumbnailPixelWidth': thumbnail_width,
-        })
+        if not video_manager.video_path:
+            return jsonify({"error": "No video file available"}), 500
+
+        try:
+            video_name = urllib.parse.quote(video_manager.video_path.name)
+            directories = video_manager.video_path.parts
+            profile = '2h' if '2h' in directories else '2s' if '2s' in directories else '1080p'
+            stream_url = f'http://{host}:{transcoder_port}/vod/{video_name}/{profile}.m3u8'
+            thumbnail_url = f'http://{host}:{port}/thumbnail_sprite'
+            return jsonify({
+                'stream': stream_url,
+                'thumbnailSprite': thumbnail_url,
+                'timestamp': video_manager.timestamp.isoformat() if video_manager.timestamp else datetime.datetime.now().isoformat(),
+                'thumbnailSeconds': seconds_per_thumbnail,
+                'thumbnailPixelWidth': thumbnail_width,
+            })
+        except Exception as e:
+            app.logger.error(f"Error in get_config: {str(e)}")
+            return jsonify({"error": str(e)}), 500
 
     @app.route('/thumbnail_sprite')
     def serve_thumbnail_sprite():
@@ -52,9 +76,9 @@ def create_app(host, port, transcoder_port, thumbnail_width, seconds_per_thumbna
 
     return app
 
+
 def parse_arguments():
     """Parse command line arguments."""
-    import argparse
     parser = argparse.ArgumentParser(description='Run the CrossStream backend server.')
     parser.add_argument('--host', type=str, required=True, help='Public address to send to peers (required)')
     parser.add_argument('--bind', type=str, default='0.0.0.0', help='Local address to bind the server to (default: 0.0.0.0)')
@@ -65,64 +89,63 @@ def parse_arguments():
     args = parser.parse_args()
     return args
 
-def main():
-    """Main entry point."""
-    args = parse_arguments()
 
-    media_dir = pathlib.Path(args.media_dir)
-    tools_dir = pathlib.Path('tools')
-    cache_dir = pathlib.Path('cache')
-
-    # Create managers
-    sprite_builder_manager = SpriteBuilder(tools_dir=tools_dir)
-    video_manager = VideoManager(
-        media_dir=media_dir,
-        cache_dir=cache_dir,
-        tools_dir=tools_dir,
-        sprite_builder_manager=sprite_builder_manager,
-        thumbnail_width=THUMBNAIL_WIDTH,
-        seconds_per_thumbnail=SECONDS_PER_THUMBNAIL
-    )
-    transcoder_manager = TranscoderManager(
-        tools_dir=tools_dir,
-        media_dir=media_dir,
-        transcoder_port=args.transcoder_port,
-        executable_name=TRANSCODER_FILENAME,
-        stop_timeout=TRANSCODER_STOP_TIMEOUT
-    )
-
+def main() -> int:
+    """Launch backend together with the Textual TUI."""
     try:
-        # Start transcoder
-        print("Starting transcoder...")
-        transcoder_manager.start()
+        args = parse_arguments()
+        
+        tools_dir = pathlib.Path('tools')
+        cache_dir = pathlib.Path('cache')
+        media_dir = pathlib.Path(args.media_dir).absolute()
 
-        # Register signal handlers
-        def signal_handler(sig, frame):
-            print("\nShutting down gracefully...")
-            transcoder_manager.stop()
-            sys.exit(0)
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
+        # Initialize managers
+        sprite_builder = SpriteBuilder(tools_dir=tools_dir)
+        video_manager = VideoManager(
+            media_dir=media_dir,
+            cache_dir=cache_dir,
+            tools_dir=tools_dir,
+            sprite_builder_manager=sprite_builder,
+            thumbnail_width=THUMBNAIL_WIDTH,
+            seconds_per_thumbnail=SECONDS_PER_THUMBNAIL,
+        )
 
-        # Find the latest video and build its thumbnail sprite
-        video_path = video_manager.find_latest_video()
-        if not video_path or not video_path.exists():
-            raise FileNotFoundError(f"No valid video file found in {media_dir}")
-        video_manager.build_thumbnail_sprite(video_path)
+        transcoder_manager = TranscoderManager(
+            tools_dir=tools_dir,
+            media_dir=media_dir,
+            transcoder_port=args.transcoder_port,
+            executable_name=TRANSCODER_FILENAME,
+            stop_timeout=TRANSCODER_STOP_TIMEOUT,
+            capture_output=True,
+        )
 
-        # Create and run Flask app
-        app = create_app(args.host, args.port, args.transcoder_port, THUMBNAIL_WIDTH, SECONDS_PER_THUMBNAIL, video_manager, transcoder_manager)
+        # Create Flask app
+        flask_app = create_app(
+            host=args.host,
+            port=args.port,
+            transcoder_port=args.transcoder_port,
+            thumbnail_width=THUMBNAIL_WIDTH,
+            seconds_per_thumbnail=SECONDS_PER_THUMBNAIL,
+            video_manager=video_manager,
+            transcoder_manager=transcoder_manager,
+        )
 
-        print(f"Starting server on http://{args.host}:{args.port}")
-        app.run(host=args.bind, port=args.port)
-    except KeyboardInterrupt:
-        print("\nShutdown requested by user")
+        # Run TUI (blocks until exit)
+        tui = HostTUI(flask_app, args.bind, args.port, transcoder_manager)
+        tui.run()
+        return 0
+
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        # If we get here, the TUI couldn't even start
+        import traceback
+        print("\n" + "=" * 80)
+        print("FATAL ERROR: The application could not start")
+        print("=" * 80)
+        traceback.print_exc()
+        print("\nPress Enter to exit...")
+        input()
         return 1
-    finally:
-        transcoder_manager.stop()
-    return 0
+
 
 if __name__ == '__main__':
     sys.exit(main())

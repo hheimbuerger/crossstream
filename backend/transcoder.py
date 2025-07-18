@@ -12,11 +12,14 @@ class TranscoderManager:
     
     def __init__(self, tools_dir: Path, media_dir: Path, transcoder_port: int,
                  executable_name: str,
+                 *,
+                 capture_output: bool = False,
                  config_template: str = 'config.yaml.template', stop_timeout: float = 5.0):
         self.executable_name = Path(executable_name)
         self.tools_dir = tools_dir
         self.media_dir = media_dir
         self.transcoder_port = transcoder_port
+        self.capture_output = capture_output
         self.config_template = tools_dir / config_template
         self.process: Optional[subprocess.Popen] = None
         self.stop_timeout = stop_timeout
@@ -29,12 +32,12 @@ class TranscoderManager:
         config_file.parent.mkdir(parents=True, exist_ok=True)
         
         # Read and format config
-        with open(self.config_template, 'r') as f:
+        with open(self.config_template, 'r', encoding='utf-8') as f:
             config = f.read().format(
                 media_dir=self.media_dir.resolve(),
                 transcoder_port=self.transcoder_port
             )
-            with open(config_file, 'w') as out:
+            with open(config_file, 'w', encoding='utf-8') as out:
                 out.write(config)
         
         # Set up process creation flags for Windows
@@ -42,20 +45,31 @@ class TranscoderManager:
         if os.name == 'nt':
             creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
         
-        # Start the transcoder process without capturing output
+        # Start the transcoder process with proper encoding handling
         transcode_cmd = [
-            self.tools_dir / self.executable_name,
+            str(self.tools_dir / self.executable_name),
             'serve',
-            '--config', config_file.resolve(),
+            '--config', str(config_file.resolve()),
         ]
         
-        print(f"Starting transcoder with command: {' '.join(str(c) for c in transcode_cmd)}")
+        print(f"Starting transcoder with command: {' '.join(transcode_cmd)}")
+        
+        # Set up environment with UTF-8 encoding
+        env = os.environ.copy()
+        env['PYTHONIOENCODING'] = 'utf-8'
         
         self.process = subprocess.Popen(
-            [str(c) for c in transcode_cmd],
+            transcode_cmd,
             cwd=str(self.tools_dir),
             shell=False,
-            creationflags=creation_flags
+            creationflags=creation_flags,
+            stdout=subprocess.PIPE if self.capture_output else None,
+            stderr=subprocess.STDOUT if self.capture_output else None,
+            bufsize=1,  # line-buffered because we enable text mode
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            env=env
         )
         
         # Verify the process started
@@ -65,6 +79,13 @@ class TranscoderManager:
             sys.exit(1)
         
         print(f"Transcoder process started with PID {self.process.pid}")
+
+    def iter_output(self):
+        """Yield output lines if capture_output=True"""
+        if not self.capture_output or not self.process or not self.process.stdout:
+            return
+        for line in self.process.stdout:
+            yield line.rstrip('\n')
 
     def stop(self) -> None:
         """Gracefully stop the transcoder process."""
@@ -88,11 +109,14 @@ class TranscoderManager:
                 self.process.wait()
                 print("Transcoder process force terminated")
                 
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError) as e:
             print(f"Error during process shutdown: {e}")
-            if self.process.poll() is None:
+            if self.process and self.process.poll() is None:
                 print("Forcing process termination...")
-                self.process.kill()
-                self.process.wait()
+                try:
+                    self.process.kill()
+                    self.process.wait(timeout=2.0)
+                except (subprocess.SubprocessError, OSError) as kill_error:
+                    print(f"Error force terminating process: {kill_error}")
         finally:
             self.process = None
