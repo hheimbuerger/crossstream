@@ -16,23 +16,23 @@ static: {media_dir}/
 # allow CORS requests (for web players)
 cors: true
 
-# For live streaming
-#streams:
-#  cam: rtmp://localhost/live/cam
-#  ch1_hd: http://192.168.1.34:9981/stream/channelid/85
-#  ch2_hd: http://192.168.1.34:9981/stream/channelid/43
-#  foo: "C:\\Develop\\CrossStream\\proto1\\test_videos\\h-fly-transcode\\hunt.mp4"
-
 # For static files
 vod:
   # prefetching strategy
   segment-buffer-min: 4
-  segment-buffer-max: 2
+  segment-buffer-max: 3
 
-  # Source, where are static files, that will be transcoded
-  media-dir: {media_dir}/
-  # Temporary transcode output directory, if empty, default tmp folder will be used
-  transcode-dir: {media_dir}/transcode
+  # relax timeouts
+  transcode-timeout: 30
+
+  # enable cache
+  cache: true
+
+  # directories
+  media-dir: {media_dir}/    # where are static files, that will be transcoded
+  transcode-dir: {media_dir}/transcode   # Temporary transcode output directory, if empty, default tmp folder will be used
+  cache-dir: ../cache
+
   # Available video profiles
   video-profiles:
     2h:
@@ -47,7 +47,8 @@ vod:
         - "-tune:v=ull"   # can be passed either as combined args, and will be split
         - "-rc:v"         # or parameter ...
         - "cbr"           # ... and value on separate lines  # HLS-VOD segment behaviour (optional)
-      #filtergraph:
+      filtergraph:
+        - "[vin]format=pix_fmts=yuv420p[vout]"
       #  - "[vin]split=2[v1][v2]"                 # duplicate the video
       #  - "[v1]crop=iw/2:ih:0:0,hflip[left]"     # mirror the left half
       #  - "[v2]crop=iw/2:ih:iw/2:0,vflip[right]" # flip the right half
@@ -64,32 +65,26 @@ vod:
         - "-tune:v=ull"   # can be passed either as combined args, and will be split
         - "-rc:v"         # or parameter ...
         - "cbr"           # ... and value on separate lines  # HLS-VOD segment behaviour (optional)
-      #filtergraph:
+      filtergraph:
+        - "[vin]format=pix_fmts=yuv420p[vout]"
       #  - "[vin]split=2[v1][v2]"                 # duplicate the video
       #  - "[v1]crop=iw/2:ih:0:0,hflip[left]"     # mirror the left half
       #  - "[v2]crop=iw/2:ih:iw/2:0,vflip[right]" # flip the right half
       #  - "[left][right]hstack[vout]"            # then put them back together
-  # Use video keyframes as existing reference for chunks split
-  # Using this might cause long probing times in order to get
-  # all keyframes - therefore they should be cached
-  video-keyframes: false
-  # Single audio profile used
+
+  # Single audio profile
   audio-profile:
     codec: copy
     #bitrate: 192 # kbps
     #filtergraph:
-    #filtergraph:
     #  - "[ain][0:a:1]amix=inputs=2[ajoined]"       # mix second audio track into the first
     #  - "[ajoined]asetrate=48000*1.5,aresample=48000[aout]" # Pitch the audio up by ~50 % (everyone's a famous mouse!)
-  # If cache is enabled
-  cache: true
-  # If dir is empty, cache will be stored in the same directory as media source
-  # If not empty, cache files will be saved to specified directory
-  cache-dir: ../cache
+
+  # Use video keyframes as existing reference for chunks split
+  # Using this might cause long probing times in order to get
+  # all keyframes - therefore they should be cached
+  video-keyframes: false
+
   # OPTIONAL: Use custom ffmpeg & ffprobe binary paths
   ffmpeg-binary: ./ffmpeg.exe
   ffprobe-binary: ./ffprobe.exe
-
-# For proxying HLS streams
-#hls-proxy:
-#  my_server: http://192.168.1.34:9981
