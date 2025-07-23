@@ -2,6 +2,7 @@
 import { DualVideoPlayer } from './DualVideoPlayer.js';
 import { PeerConnection } from './PeerConnection.js';
 import { SynchronizationEngine } from './SynchronizationEngine.js';
+import { verifyBrowserSupport } from './BrowserSupport.js';
 import { UI } from './UI.js';
 import bus from './EventBus.js';
 
@@ -108,6 +109,10 @@ function loadConfig() {
 }
 
 async function initializeApp() {
+    if (!verifyBrowserSupport()) {
+        return; // Unsupported: modal already shown by BrowserSupport module.
+    }
+
     try {
         // Initialize UI (event handling uses central EventBus now)
         ui = new UI();

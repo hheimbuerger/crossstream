@@ -163,6 +163,67 @@ body {
     transform: translateX(-50%);
 }
 
+.unsupported-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.9);
+    color: white;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: center;
+    font-family: monospace;
+    padding: 2em;
+    text-align: left;
+    z-index: 10000;
+    overflow-y: auto;
+}
+
+.diagnostics-log {
+    width: 100%;
+    max-width: 960px;
+    background: rgba(0, 0, 0, 0.6);
+    padding: 1em;
+    border: 1px solid #555;
+    overflow-y: auto;
+    max-height: 60vh;
+    font-family: monospace;
+}
+
+.log-info {
+    color: #9ecffd;
+}
+.log-success {
+    color: #7CFC00;
+}
+.log-warning {
+    color: #FFD700;
+}
+.log-error {
+    color: #FF6347;
+}
+
+.unsupported-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.9);
+    color: white;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    font-size: 1.5rem;
+    padding: 2em;
+    text-align: center;
+    z-index: 10000;
+}
+
 .hidden {
     display: none;
 }
