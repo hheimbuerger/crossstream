@@ -114,6 +114,8 @@ export class SynchronizationEngine {
         const dvp = this.getDualVideoPlayer();
         if (!dvp) return;
         dvp.playOnceReady();
+        // Pulse play/pause button
+        bus.emit('uiPulse', { elementId: 'playPauseButton' });
     };
 
     handleRemotePauseSeek = (command) => {
@@ -123,6 +125,8 @@ export class SynchronizationEngine {
         const dvp = this.getDualVideoPlayer();
         if (!dvp) return;
         dvp.seek(command.playhead); // seek pauses internally
+        // Pulse play/pause button
+        bus.emit('uiPulse', { elementId: 'playPauseButton' });
     };
 
     handleRemoteAudioChange = (command) => {
@@ -133,9 +137,22 @@ export class SynchronizationEngine {
         const dvp = this.getDualVideoPlayer();
         if (!dvp) return;
         let localTrack;
-        if (track === 'local') localTrack = 'remote';
-        else if (track === 'remote') localTrack = 'local';
-        else localTrack = 'none';
+        let elementId;
+        if (track === 'local') {
+            localTrack = 'remote';
+            elementId = 'right-audio-activate';
+        } else if (track === 'remote') {
+            localTrack = 'local';
+            elementId = 'left-audio-activate';
+        } else {
+            localTrack = 'none';
+            // Could pulse both, or neither; here, pulse both
+            bus.emit('uiPulse', { elementId: 'left-audio-activate' });
+            bus.emit('uiPulse', { elementId: 'right-audio-activate' });
+        }
         dvp.switchAudio(localTrack);
+        if (elementId) {
+            bus.emit('uiPulse', { elementId });
+        }
     };
 }

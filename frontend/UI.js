@@ -90,6 +90,19 @@ export class UI {
         return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
     }
 
+    /**
+     * Pulse a UI element with a bluish aura for 0.5s
+     * @param {string} elementId - DOM id of the element to pulse
+     */
+    pulse(elementId) {
+        const el = document.getElementById(elementId);
+        if (!el) return;
+        el.classList.add('pulse-remote');
+        setTimeout(() => {
+            el.classList.remove('pulse-remote');
+        }, 500);
+    }
+
     // --- Scrubber Management ---
     /**
      * Initializes the scrubber component with the provided configurations
@@ -210,6 +223,11 @@ export class UI {
         bus.on('playersInitialized', ({ playhead, duration, localConfig, remoteConfig }) => {
             this.setupScrubber(localConfig, remoteConfig, duration);
             this.updateTimeDisplay(playhead, duration);
+        });
+
+        // Listen for UI pulse events (remote)
+        bus.on('uiPulse', ({ elementId }) => {
+            this.pulse(elementId);
         });
 
         // Reflect state changes coming from synchronizer
