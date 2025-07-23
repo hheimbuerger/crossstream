@@ -71,7 +71,7 @@ def create_app(host, port, transcoder_port, thumbnail_width, seconds_per_thumbna
 
     @app.route('/thumbnail_sprite')
     def serve_thumbnail_sprite():
-        thumbnail_path = video_manager.build_thumbnail_sprite(video_manager.video_path)
+        thumbnail_path = video_manager.build_thumbnail_sprite()
         return send_file(thumbnail_path, mimetype='image/jpeg')
 
     return app
@@ -94,10 +94,10 @@ def main() -> int:
     """Launch backend together with the Textual TUI."""
     try:
         args = parse_arguments()
-        
-        tools_dir = pathlib.Path('tools')
-        cache_dir = pathlib.Path('cache')
-        media_dir = pathlib.Path(args.media_dir).absolute()
+
+        media_dir = pathlib.Path(args.media_dir).resolve()
+        cache_dir = pathlib.Path('cache').resolve()
+        tools_dir = pathlib.Path('tools').resolve()
 
         # Initialize managers
         sprite_builder = SpriteBuilder(tools_dir=tools_dir)

@@ -29,16 +29,15 @@ class VideoManager:
         print(f'Using most recently created video: {self.video_path.name} (created: {self.timestamp.isoformat()})')
         return self.video_path
 
-    def build_thumbnail_sprite(self, video_path: Optional[Path] = None) -> Path:
+    def build_thumbnail_sprite(self) -> Path:
         """Build and return path to thumbnail sprite."""
-        video_path = video_path or self.video_path
-        if not video_path:
+        if not self.video_path:
             raise ValueError("No video path provided and no default video set")
-        thumbnail_path = self.cache_dir / f"{video_path.stem}.thumbnail.jpeg"
+        thumbnail_path = self.cache_dir / f"{self.video_path.stem}.thumbnail.jpeg"
         if not thumbnail_path.exists():
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             self.sprite_builder_manager.build_thumbnail_sprite(
-                str(video_path),
+                str(self.video_path),
                 str(thumbnail_path),
                 self.seconds_per_thumbnail,
                 self.thumbnail_width
