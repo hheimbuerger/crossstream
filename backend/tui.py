@@ -2,21 +2,85 @@ import datetime
 import logging
 import threading
 import queue
+import io
 import traceback
 import time
-import re
 import sys
+import re
 from itertools import zip_longest
 from typing import Any
 from logging.handlers import QueueHandler
 
 from flask import Flask
-
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import RichLog
+from textual.widgets import RichLog, Static
+from werkzeug.serving import make_server
 
 from .transcoder import TranscoderManager
+
+
+def parse_status_update_log(line: str):
+    """
+    Parse a status update log line and extract segments, downloads, stats, and the colored segment map.
+    Returns a dict with keys: segments, downloads, stats, colored_segments, stats_line
+    """
+    downloads_match = re.search(r'downloads="([^"]+)"', line)
+    segments_match = re.search(r'segments="([^"]+)"', line)
+    segments = segments_match.group(1) if segments_match else ''
+    segments = segments.encode('utf-8', 'replace').decode('utf-8')
+    downloads = downloads_match.group(1) if downloads_match else ''
+    # Extract statistics from the status update
+    stats = {}
+    for stat in ['queued', 'in_progress', 'done', 'dl_requested', 'dl_sent']:
+        match = re.search(f'{stat}=(\d+)', line)
+        if match:
+            stats[stat] = int(match.group(1))
+    colored_segments = render_segment_map(segments, downloads)
+    # Get stat values with defaults
+    q = stats.get('queued', 0)
+    i = stats.get('in_progress', 0)
+    d = stats.get('done', 0)
+    r = stats.get('dl_requested', 0)
+    s = stats.get('dl_sent', 0)
+    stats_line = f"Seg: {q:2d}q  {i:1d}i {d:2d}d / DL: {r:2d}r  {s:1d}s"
+    return {
+        'segments': segments,
+        'downloads': downloads,
+        'stats': stats,
+        'colored_segments': colored_segments,
+        'stats_line': stats_line
+    }
+
+def render_segment_map(segments: str, downloads: str) -> str:
+    """
+    Render the segment map string using the segment character for display, only updating colors as requested.
+    - Use the character from the segments string, not invented characters.
+    - Completed download: dark green background, white foreground (unless segment char is a full square, then use dark green fg, no bg)
+    - In-progress download: orange background, white foreground
+    - Error download: red background, white foreground
+    - Not requested: no background, default fg
+    """
+    DARK_GREEN = "#207520"
+    ORANGE = "#d97c13"
+    RED = "red"
+    WHITE = "white"
+    # Characters considered as "full square" for special fg handling
+    FULL_SQUARES = {"█", "■"}
+    out = []
+    for seg_char, dl_char in zip_longest(segments, downloads, fillvalue="–"):
+        if dl_char == "✓":
+            if seg_char in FULL_SQUARES:
+                out.append(f"[{DARK_GREEN}]{seg_char}[/]")
+            else:
+                out.append(f"[on {DARK_GREEN} {WHITE}]{seg_char}[/]")
+        elif dl_char == "▶":
+            out.append(f"[on {ORANGE} {WHITE}]{seg_char}[/]")
+        elif dl_char == "!":
+            out.append(f"[on {RED} {WHITE}]{seg_char}[/]")
+        else:
+            out.append(seg_char)
+    return "".join(out)
 
 class HostTUI(App):
     """Full-screen TUI displaying backend & transcoder output plus segment map."""
@@ -67,13 +131,26 @@ class HostTUI(App):
         overflow: auto;
         scrollbar-size: 1 1;
     }
-    #segment_map {
+    #right_panel {
         width: 1fr;
         height: 100%;
+        layout: vertical;
+    }
+    #segment_map {
+        width: 100%;
+        height: 1fr;
         border: round $accent;
         background: $boost;
-        overflow: hidden;
+        overflow: auto;
         min-width: 0;  /* Allow the panel to shrink below content size */
+    }
+    #stats_line {
+        height: 1;
+        width: 100%;
+        padding: 0 1;
+        align: center middle;
+        /*margin-top: 1;*/
+        background: $boost;
     }
     /* Ensure text wraps properly in log widgets */
     .text-log {
@@ -93,14 +170,15 @@ class HostTUI(App):
         ("escape", "quit", "Quit"),
     ]
 
-    def __init__(self, flask_app: Flask, flask_bind: str, flask_port: int, transcoder_manager: TranscoderManager):
+    def __init__(self, flask_app: Flask, flask_bind: str, flask_port: int, transcoder_manager: TranscoderManager, flask_queue: queue.Queue[str]):
         super().__init__()
         self._flask_app = flask_app
         self._flask_bind = flask_bind
         self._flask_port = flask_port
         self._transcoder_manager = transcoder_manager
 
-        self._flask_queue: queue.Queue[str] = queue.Queue()
+        # Queue receiving all backend log records (Flask + initialization)
+        self._flask_queue: queue.Queue[str] = flask_queue
         self._transcoder_queue: queue.Queue[str] = queue.Queue()
 
     # --- Layout ----------------------------------------------------------------
@@ -109,7 +187,9 @@ class HostTUI(App):
             with Vertical(id="left"):
                 yield RichLog(id="flask_log", wrap=False, markup=True, auto_scroll=True)
                 yield RichLog(id="transcoder_log", wrap=False, markup=True, auto_scroll=True)
-            yield RichLog(id="segment_map", wrap=True, markup=True, min_width=0)
+            with Vertical(id="right_panel"):
+                yield RichLog(id="segment_map", wrap=True, markup=True, min_width=0)
+                yield Static("", id="stats_line")
 
     # --- Background tasks -------------------------------------------------------
     async def on_mount(self) -> None:  # type: ignore[override]
@@ -119,9 +199,10 @@ class HostTUI(App):
             self.flask_log = self.query_one("#flask_log", RichLog)
             self.transcoder_log = self.query_one("#transcoder_log", RichLog)
             self.segment_map = self.query_one("#segment_map", RichLog)
+            self.stats_display = self.query_one("#stats_line", Static)
 
             # Set titles
-            self.flask_log.border_title = "Flask Log"
+            self.flask_log.border_title = "Backend Log"
             self.transcoder_log.border_title = "Transcoder Log"
             self.segment_map.border_title = "Segment Map"
 
@@ -156,7 +237,6 @@ class HostTUI(App):
             self.set_interval(0.1, self._drain_queues)
 
         except Exception as e:
-            import traceback
             error_msg = f"Error during startup: {str(e)}\n{traceback.format_exc()}"
             if hasattr(self, 'transcoder_log'):
                 self.transcoder_log.write(error_msg)
@@ -168,10 +248,6 @@ class HostTUI(App):
     def _run_flask(self):
         """Run Flask application in background WSGI server while capturing logs."""
         try:
-            from werkzeug.serving import make_server
-            import sys
-            import io
-            from contextlib import redirect_stderr, redirect_stdout
 
             # Name the thread for easier identification
             threading.current_thread().name = 'flask-server'
@@ -193,6 +269,10 @@ class HostTUI(App):
             # Also capture werkzeug logs
             werkzeug_logger = logging.getLogger('werkzeug')
             werkzeug_logger.setLevel(logging.INFO)
+            # Remove all handlers and prevent propagation to root
+            for handler in werkzeug_logger.handlers[:]:
+                werkzeug_logger.removeHandler(handler)
+            werkzeug_logger.propagate = False
             werkzeug_logger.addHandler(qh)
 
             # Create a stream to capture stderr
@@ -315,7 +395,15 @@ class HostTUI(App):
                 msg = self._strip_ansi(msg)
                 timestamp = datetime.datetime.fromtimestamp(record.created).strftime('%H:%M:%S')
                 level = record.levelname
-                return f"[{timestamp}] {level}: {msg}"
+                # For HTTP request logs, strip leading IP and dashes
+                # Example: '127.0.0.1 - - [22/Jul/2025 18:15:25] "GET /DualVideoPlayer.js HTTP/1.1" 304 -'
+                import re as _re
+                http_match = _re.match(r"^\d+\.\d+\.\d+\.\d+ - - \[[^\]]+\] (.*)$", msg)
+                if http_match:
+                    msg = http_match.group(1).strip()
+                    # Remove trailing dash or arrow if present
+                    msg = msg.rstrip('-').rstrip('>').rstrip().rstrip()
+                return f"[{timestamp}] {level} {msg}"
             return self._strip_ansi(str(record))
         return self._strip_ansi(str(record))
 
@@ -346,18 +434,15 @@ class HostTUI(App):
                         continue
                     line = self._strip_ansi(line).strip()
                     if 'status update' in line:
-                        downloads_match = re.search(r'downloads="([^"]+)"', line)
-                        segments_match = re.search(r'segments="([^"]+)"', line)
-                        if segments_match:
-                            segments = segments_match.group(1)
-                            segments = segments.encode('utf-8', 'replace').decode('utf-8')
-                            downloads = downloads_match.group(1) if downloads_match else ''
-                            colored_segments = "".join(
-                                f"[bright_magenta]{seg}[/]" if dl == '0' else seg
-                                for seg, dl in zip_longest(segments, downloads, fillvalue=' ')
-                            )
-                            self.segment_map.clear()
-                            self.segment_map.write(colored_segments)
+                        # Print the raw status line for debugging
+                        # self.transcoder_log.write(line)
+                        
+                        # Parse and process the status update
+                        status_info = parse_status_update_log(line)
+                        self.segment_map.clear()
+                        self.segment_map.write(status_info['colored_segments'])
+                        stats_widget = self.query_one("#stats_line", Static)
+                        stats_widget.update(status_info['stats_line'])
                         continue
                     transcoder_lines.append(line)
                 except queue.Empty:

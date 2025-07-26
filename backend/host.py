@@ -1,10 +1,12 @@
 import argparse
 import datetime
 import pathlib
+import io
 import sys
 import urllib.parse
 import urllib.request
 import os
+import signal
 
 from flask import Flask, jsonify, send_from_directory, send_file
 
@@ -55,7 +57,7 @@ def create_app(host, port, transcoder_port, thumbnail_width, seconds_per_thumbna
         try:
             video_name = urllib.parse.quote(video_manager.video_path.name)
             directories = video_manager.video_path.parts
-            profile = '2h' if '2h' in directories else '2s' if '2s' in directories else '1080p'
+            profile = '2h' if '2h' in directories else '2s' if '2s' in directories else '2h'
             stream_url = f'http://{host}:{transcoder_port}/vod/{video_name}/{profile}.m3u8'
             thumbnail_url = f'http://{host}:{port}/thumbnail_sprite'
             return jsonify({
@@ -93,7 +95,32 @@ def parse_arguments():
 def main() -> int:
     """Launch backend together with the Textual TUI."""
     try:
+        import queue, logging
         args = parse_arguments()
+
+        # ------------------------------------------------------------------
+        # Backend log queue capturing *all* initialization & Flask output
+        # ------------------------------------------------------------------
+        flask_queue: "queue.Queue[str]" = queue.Queue()
+
+        # Send stdio to queue so plain prints appear in Backend Log
+        class _StreamToQueue(io.TextIOBase):
+            def __init__(self, q: "queue.Queue[str]"):
+                super().__init__()
+                self._q = q
+
+            def write(self, s: str):
+                if s.strip():
+                    self._q.put(s.rstrip("\n"))
+                return len(s)
+        sys.stdout = _StreamToQueue(flask_queue)  # type: ignore
+        sys.stderr = _StreamToQueue(flask_queue)  # type: ignore
+
+        # Route logging records to queue as well
+        queue_handler = logging.handlers.QueueHandler(flask_queue)  # type: ignore[attr-defined]
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.INFO)
+        root_logger.addHandler(queue_handler)
 
         media_dir = pathlib.Path(args.media_dir).resolve()
         cache_dir = pathlib.Path('cache').resolve()
@@ -119,6 +146,19 @@ def main() -> int:
             capture_output=True,
         )
 
+        # ------------------------------------------------------------------
+        # Restore graceful shutdown on SIGINT / SIGTERM
+        # ------------------------------------------------------------------
+        def _signal_handler(sig, frame):  # type: ignore[unused-argument]
+            print("\nShutting down gracefully...")
+            try:
+                transcoder_manager.stop()
+            finally:
+                sys.exit(0)
+
+        signal.signal(signal.SIGINT, _signal_handler)
+        signal.signal(signal.SIGTERM, _signal_handler)
+
         # Create Flask app
         flask_app = create_app(
             host=args.host,
@@ -131,7 +171,7 @@ def main() -> int:
         )
 
         # Run TUI (blocks until exit)
-        tui = HostTUI(flask_app, args.bind, args.port, transcoder_manager)
+        tui = HostTUI(flask_app, args.bind, args.port, transcoder_manager, flask_queue)
         tui.run()
         return 0
 
