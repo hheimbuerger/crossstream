@@ -27,6 +27,7 @@ A data class representing the configuration for a single video stream. This conf
 - `timestamp` (ISO 8601 string, required): The exact time when the video recording started, in ISO 8601 format (e.g., "2025-06-08T12:00:00+02:00"). This is crucial for calculating time offsets between different streams.
 - `thumbnailSeconds` (number, required): The interval between thumbnails in seconds.
 - `thumbnailPixelWidth` (number, required): The width of each thumbnail in pixels.
+- `thumbnailPixelHeight` (number, required): The height of each thumbnail in pixels.
 
 **Example:**
 ```json
@@ -35,13 +36,16 @@ A data class representing the configuration for a single video stream. This conf
   "thumbnailSprite": "http://example.com/thumbnails/stream1_sprite.jpg",
   "timestamp": "2025-06-08T12:00:00+02:00",
   "thumbnailSeconds": 5.0,
-  "thumbnailPixelWidth": 64
+  "thumbnailPixelWidth": 160,
+  "thumbnailPixelHeight": 90
 }
 ```
 
 **Usage Notes:**
 - The `timestamp` field enables synchronization between multiple streams by allowing the calculation of time offsets between when different streams started recording.
-- The `thumbnailSprite` should contain thumbnails at regular intervals (e.g., one thumbnail per second) to enable the timeline scrubber functionality.
+- The `thumbnailSprite` should contain thumbnails at regular intervals arranged horizontally in a single row, with each thumbnail exactly `thumbnailPixelWidth` pixels wide.
+- The scrubber uses these timestamps to calculate video offsets and display the correct thumbnail from each video's timeline when hovering over the unified timeline.
+- Thumbnail dimensions can vary between local and remote videos, allowing for different quality/size configurations per stream.
 
 ## Event Handling
 
@@ -94,14 +98,25 @@ The UI subsystem manages all user interface elements and interactions, serving a
    - Handles all user input events
 
 2. **Scrubber Component**
-   - Handles timeline scrubbing and preview
-   - Manages thumbnail display and hover states
-   - Provides seek functionality
-   - Handles both mouse and touch interactions
-   - Constructed with `{ duration, onSeek }` where `duration` is unified timeline length in seconds.
-   - All user interactions (drag, click) emit seconds directly.
-   - Hover moves the thumb without seeking via `handleHover(clientX)`.
-   - No internal concept of 0-1 ratios is exposed outside the component.
+   - Handles timeline scrubbing and preview with unified timeline support
+   - Manages dual thumbnail display with video offset compensation
+   - Provides click-to-seek functionality (no dragging)
+   - Displays timeline markers with magnetic hover labels
+   - Constructed with `(domElement, localConfig, remoteConfig, markerTimes)`
+   - Automatically calculates video offsets based on timestamps
+   - Shows thumbnails from both videos at correct timeline positions
+   - Handles edge cases (before/after video content) with grayed thumbnails
+   - Prevents thumbnail viewport overflow with intelligent repositioning
+   - All interactions emit `localPause` followed by `localSeek` events
+   
+   **Key Features:**
+   - **Video Offset Handling**: Calculates time offsets between local and remote videos based on their timestamps, ensuring thumbnails show the correct frame from each video's timeline
+   - **Stepped Thumbnail Selection**: Snaps to complete thumbnail frames (no partial thumbnails) for crisp preview images
+   - **Dual Thumbnail Preview**: Shows both local and remote video thumbnails simultaneously on hover, positioned diagonally from the mouse cursor
+   - **Edge Case Management**: When hovering before a video starts or after it ends, displays the first/last thumbnail with reduced opacity (0.3) for visual feedback
+   - **Timeline Markers**: Supports configurable timeline markers with magnetic hover detection (20px range) and formatted time labels
+   - **Viewport Protection**: Automatically repositions thumbnails to prevent overflow at screen edges while maintaining relative spacing
+   - **Config-Driven Sizing**: Uses individual thumbnail dimensions from each video's configuration for proper aspect ratios
 
 ### Data Flow
 1. User interactions are captured by UI event listeners

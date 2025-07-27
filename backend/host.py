@@ -21,13 +21,11 @@ from .tui import HostTUI
 NAME = "CrossStream Backend"
 DEFAULT_PORT = 6001
 DEFAULT_TRANSCODER_PORT = 6002
-THUMBNAIL_WIDTH = 64
-SECONDS_PER_THUMBNAIL = 5.0
 TRANSCODER_STOP_TIMEOUT = 5.0
 TRANSCODER_FILENAME = 'transcode-wip2025.exe'
 
 
-def create_app(host, port, transcoder_port, thumbnail_width, seconds_per_thumbnail, video_manager, transcoder_manager):
+def create_app(host, port, transcoder_port, video_manager, transcoder_manager):
     """Create and configure the Flask application."""
     app = Flask(__name__)
 
@@ -62,10 +60,12 @@ def create_app(host, port, transcoder_port, thumbnail_width, seconds_per_thumbna
             thumbnail_url = f'http://{host}:{port}/thumbnail_sprite'
             return jsonify({
                 'stream': stream_url,
+                'timestamp': video_manager.timestamp.isoformat(),
+                'duration': 60,
                 'thumbnailSprite': thumbnail_url,
-                'timestamp': video_manager.timestamp.isoformat() if video_manager.timestamp else datetime.datetime.now().isoformat(),
-                'thumbnailSeconds': seconds_per_thumbnail,
-                'thumbnailPixelWidth': thumbnail_width,
+                'thumbnailSeconds': video_manager.seconds_per_thumbnail,
+                'thumbnailPixelWidth': video_manager.thumbnail_width,
+                'thumbnailPixelHeight': video_manager.thumbnail_height,
             })
         except Exception as e:
             app.logger.error(f"Error in get_config: {str(e)}")
@@ -133,8 +133,6 @@ def main() -> int:
             cache_dir=cache_dir,
             tools_dir=tools_dir,
             sprite_builder_manager=sprite_builder,
-            thumbnail_width=THUMBNAIL_WIDTH,
-            seconds_per_thumbnail=SECONDS_PER_THUMBNAIL,
         )
 
         transcoder_manager = TranscoderManager(
@@ -164,8 +162,6 @@ def main() -> int:
             host=args.host,
             port=args.port,
             transcoder_port=args.transcoder_port,
-            thumbnail_width=THUMBNAIL_WIDTH,
-            seconds_per_thumbnail=SECONDS_PER_THUMBNAIL,
             video_manager=video_manager,
             transcoder_manager=transcoder_manager,
         )

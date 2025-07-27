@@ -15,9 +15,6 @@ export class UI {
             forwardBtn: document.getElementById('forwardButton'),
             timeDisplay: document.getElementById('timecode'),
             scrubber: document.getElementById('scrubber'),
-            scrubberThumb: document.getElementById('playhead-marker'),
-            leftScrubber: document.getElementById('scrubber-left'),
-            rightScrubber: document.getElementById('scrubber-right'),
             audioLocalBtn: document.getElementById('left-audio-activate'),
             audioRemoteBtn: document.getElementById('right-audio-activate'),
         };
@@ -80,7 +77,7 @@ export class UI {
     updateTimeDisplay(playhead, duration) {
         // console.log('updateTimeDisplay', playhead, duration);
         const currentTimeFormatted = this.formatTime(playhead);
-        const durationFormatted = this.formatTime(duration || 0);   // FIXME: wtf is duration sometimes undefined, even though I definitely emit 0!???
+        const durationFormatted = this.formatTime(duration);
         this.elements.timeDisplay.textContent = `${currentTimeFormatted} / ${durationFormatted}`;
     }
 
@@ -116,45 +113,13 @@ export class UI {
             this.scrubber.cleanup();
         }
 
-        // Calculate timeline offsets in seconds
-        const localStartTime = localConfig?.timestamp ? new Date(localConfig.timestamp).getTime() : 0;
-        const remoteStartTime = remoteConfig?.timestamp ? new Date(remoteConfig.timestamp).getTime() : 0;
-        
-        // Calculate the time difference between the two videos in seconds
-        const timeDiffMs = remoteStartTime - localStartTime;
-        const timeDiffSec = timeDiffMs / 1000;
-        
-        // Calculate the offset in thumbnail units (number of thumbnails to shift)
-        const thumbnailSeconds = localConfig?.thumbnailSeconds || remoteConfig?.thumbnailSeconds || 5.0;
-        const offsetThumbnails = timeDiffSec / thumbnailSeconds;
-        
-        // Local video is always the reference (offset 0), remote video is offset by the time difference
-        const localOffset = 0;  // Local video is the reference
-        const remoteOffset = offsetThumbnails;  // Remote video is offset by the time difference in thumbnail units
-
-        // Create new scrubber instance with options
-        this.scrubber = new Scrubber(this.elements, {
-            duration: totalDuration,
-            onSeek: (playheadSeconds) => {
-                bus.emit('localSeek', playheadSeconds);
-            },
-            seekDelay: 50, // Debounce seek events during drag for better performance
-            localOffset: -localOffset, // Negative because we want to shift the thumbnail left
-            remoteOffset: -remoteOffset // Negative because we want to shift the thumbnail left
-        });
-        
-        // Set initial thumbnails if available
-        if (localConfig?.thumbnailSprite || remoteConfig?.thumbnailSprite) {
-            // Use the thumbnail pixel width from the config (should be present in both local and remote configs)
-            const thumbnailPixelWidth = localConfig?.thumbnailPixelWidth || remoteConfig?.thumbnailPixelWidth || 160;
-            
-            this.scrubber.updateThumbnails(
-                localConfig?.thumbnailSprite || '',
-                remoteConfig?.thumbnailSprite || '',
-                offsetThumbnails,
-                thumbnailPixelWidth
-            );
-        }
+        // Initialize scrubber – it now does all timeline maths internally
+        this.scrubber = new Scrubber(
+            this.elements.scrubber,
+            localConfig,
+            remoteConfig,
+            [5 * 60, 25 * 60]   // Hardcoded markers (5 minutes and 25 minutes)
+        );
         
         return this.scrubber;
     }
@@ -182,20 +147,6 @@ export class UI {
             bus.emit('localSeekRelative', UI.SEEK_STEP);
         });
 
-        // Scrubber hover delegation (thumb highlight only)
-        scrubber.addEventListener('mousemove', (e) => {
-            if (this.scrubber) {
-                this.scrubber.handleHover(e.clientX);
-            }
-        });
-
-        // Click -> seek
-        scrubber.addEventListener('click', (e) => {
-            if (this.scrubber) {
-                this.scrubber.handleScrubberClick(e);
-            }
-        });
-    
         // Audio source toggles
         audioLocalBtn?.addEventListener('click', () => {
             // If already active, mute
@@ -237,14 +188,14 @@ export class UI {
             this.updatePlayPauseButton(state.state === 'playing');
             this.updateTimeDisplay(state.playhead, state.duration);
             if (this.scrubber)   // this actually requires a check because it might be emitted as part of the initial seek, in parallel to scrubber initialization
-                this.scrubber.updateTime(state.playhead);
+                this.scrubber.updatePlayhead(state.playhead);
         });
 
         // Handle time updates during playback
         bus.on('timeUpdate', ({playhead, duration}) => {
             this.updateTimeDisplay(playhead, duration);
             if (this.scrubber)
-                this.scrubber.updateTime(playhead);
+                this.scrubber.updatePlayhead(playhead);
         });
 
         // Handle remote audio changes to ensure UI stays in sync
@@ -277,7 +228,7 @@ export class UI {
         
         // Clean up scrubber
         if (this.scrubber) {
-            this.scrubber.cleanup();
+            this.scrubber.destroy();
             this.scrubber = null;
         }
         

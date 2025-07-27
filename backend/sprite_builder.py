@@ -11,11 +11,10 @@ class SpriteBuilder:
     def __init__(self, tools_dir: Path):
         self.tools_dir = tools_dir
 
-    def build_thumbnail_sprite(self, input, output, seconds_per_thumbnail, thumbnail_height):
+    def build_thumbnail_sprite(self, input, output, seconds_per_thumbnail, thumbnail_width, thumbnail_height):
         """
         Build a thumbnail sprite synchronously for the given video.
         """
-        thumbnail_width = thumbnail_height / 9 * 16
         duration, fps = self._probe_video(input)
         frame_interval = seconds_per_thumbnail * fps
         frame_count = int(duration * fps)
@@ -44,7 +43,6 @@ class SpriteBuilder:
             raise RuntimeError(f'Error running ffmpeg: {results.stderr}')
         return True
 
-
     def _run_ffprobe(self, *arguments):
         ffprobe_path = self.tools_dir / "ffprobe"
         result = subprocess.run((ffprobe_path,) + arguments, capture_output=True)
@@ -71,8 +69,7 @@ class SpriteBuilder:
         print(f'  duration: {duration}, fps: {fps}')
         return duration, fps
 
-    def _build_thumbnail_sprite(self, input, output, seconds_per_thumbnail, thumbnail_height):
-        thumbnail_width = thumbnail_height / 9 * 16
+    def _build_thumbnail_sprite(self, input, output, seconds_per_thumbnail, thumbnail_width, thumbnail_height):
         duration, fps = self._probe_video(input)
         frame_interval = seconds_per_thumbnail * fps
         frame_count = int(duration * fps)

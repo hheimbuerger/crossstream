@@ -5,11 +5,12 @@ from .sprite_builder import SpriteBuilder
 
 class VideoManager:
     """Handles video file operations and thumbnail generation."""
-    def __init__(self, media_dir: Path, cache_dir: Path, tools_dir: Path, sprite_builder_manager: SpriteBuilder, thumbnail_width: int = 64, seconds_per_thumbnail: float = 5.0):
+    def __init__(self, media_dir: Path, cache_dir: Path, tools_dir: Path, sprite_builder_manager: SpriteBuilder, thumbnail_height: int = 90, seconds_per_thumbnail: float = 5.0):
         self.media_dir = media_dir
         self.cache_dir = cache_dir
         self.tools_dir = tools_dir
-        self.thumbnail_width = thumbnail_width
+        self.thumbnail_width = thumbnail_height * 16 // 9
+        self.thumbnail_height = thumbnail_height
         self.seconds_per_thumbnail = seconds_per_thumbnail
         self.sprite_builder_manager = sprite_builder_manager
         self.video_path: Optional[Path] = None
@@ -40,7 +41,8 @@ class VideoManager:
                 str(self.video_path),
                 str(thumbnail_path),
                 self.seconds_per_thumbnail,
-                self.thumbnail_width
+                self.thumbnail_width,
+                self.thumbnail_height
             )
         return thumbnail_path
 
