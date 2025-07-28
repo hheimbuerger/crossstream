@@ -10,9 +10,8 @@ export class Scrubber {
      * @param {HTMLElement} domElement - Required DOM element
      * @param {Object} localConfig - Full local video config object
      * @param {Object} remoteConfig - Full remote video config object
-     * @param {Array<number>} markerTimes - Array of marker times in seconds
      */
-    constructor(domElement, localConfig, remoteConfig, markerTimes) {
+    constructor(domElement, localConfig, remoteConfig) {
         this.container = domElement;
 
         // Store config data
@@ -44,7 +43,6 @@ export class Scrubber {
         this.remoteThumbnail = null;
         this.markers = [];
         this.markerLabel = null;
-        this.markerTimes = markerTimes;
         
         this.initialize();
     }
@@ -135,7 +133,8 @@ export class Scrubber {
      * @private
      */
     createMarkers() {
-        this.markerTimes.forEach((timeInSeconds, index) => {
+        const allChapters = [...this.localConfig.chapters, ...this.remoteConfig.chapters];
+        allChapters.sort((a, b) => a - b).forEach((timeInSeconds, index) => {
             const marker = document.createElement('div');
             marker.className = 'scrubber-marker';
             marker.dataset.time = timeInSeconds;

@@ -113,12 +113,11 @@ export class UI {
             this.scrubber.cleanup();
         }
 
-        // Initialize scrubber – it now does all timeline maths internally
+        // Initialize scrubber
         this.scrubber = new Scrubber(
             this.elements.scrubber,
             localConfig,
-            remoteConfig,
-            [5 * 60, 25 * 60]   // Hardcoded markers (5 minutes and 25 minutes)
+            remoteConfig
         );
         
         return this.scrubber;

@@ -12,7 +12,6 @@ from flask import Flask, jsonify, send_from_directory, send_file
 
 from .transcoder import TranscoderManager
 from .video_manager import VideoManager
-from .sprite_builder import SpriteBuilder
 
 from .tui import HostTUI
 
@@ -28,14 +27,6 @@ TRANSCODER_FILENAME = 'transcode-wip2025.exe'
 def create_app(host, port, transcoder_port, video_manager, transcoder_manager):
     """Create and configure the Flask application."""
     app = Flask(__name__)
-
-    # Ensure we have a video file before setting up routes
-    try:
-        video_path = video_manager.find_latest_video()
-        app.logger.info(f"Using video file: {video_path}")
-    except Exception as e:
-        app.logger.error(f"Failed to find video file: {e}")
-        raise
 
     FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'frontend'))
 
@@ -58,10 +49,13 @@ def create_app(host, port, transcoder_port, video_manager, transcoder_manager):
             profile = '2h' if '2h' in directories else '2s' if '2s' in directories else '2h'
             stream_url = f'http://{host}:{transcoder_port}/vod/{video_name}/{profile}.m3u8'
             thumbnail_url = f'http://{host}:{port}/thumbnail_sprite'
+            chapter_times = [chapter['start_time'] for chapter in video_manager.chapters]
+            
             return jsonify({
                 'stream': stream_url,
                 'timestamp': video_manager.timestamp.isoformat(),
-                'duration': 60,
+                'duration': video_manager.duration,
+                'chapters': chapter_times,
                 'thumbnailSprite': thumbnail_url,
                 'thumbnailSeconds': video_manager.seconds_per_thumbnail,
                 'thumbnailPixelWidth': video_manager.thumbnail_width,
@@ -73,7 +67,7 @@ def create_app(host, port, transcoder_port, video_manager, transcoder_manager):
 
     @app.route('/thumbnail_sprite')
     def serve_thumbnail_sprite():
-        thumbnail_path = video_manager.build_thumbnail_sprite()
+        thumbnail_path = video_manager.thumbnail_sprite_path
         return send_file(thumbnail_path, mimetype='image/jpeg')
 
     return app
@@ -88,6 +82,8 @@ def parse_arguments():
     parser.add_argument('--transcoder-port', type=int, default=DEFAULT_TRANSCODER_PORT, 
                         help=f'Port for the transcoder (default: {DEFAULT_TRANSCODER_PORT})')
     parser.add_argument('--media-dir', type=pathlib.Path, required=True, help='Directory containing media files')
+    parser.add_argument('--force-timestamp-from-filename', action='store_true',
+                        help='Extract timestamp from filename using pattern YYYY*MM*DD*HH*mm*SS instead of using file creation time')
     args = parser.parse_args()
     return args
 
@@ -126,13 +122,12 @@ def main() -> int:
         cache_dir = pathlib.Path('cache').resolve()
         tools_dir = pathlib.Path('tools').resolve()
 
-        # Initialize managers
-        sprite_builder = SpriteBuilder(tools_dir=tools_dir)
+        # Initialize managers (VideoManager will be initialized later by TUI)
         video_manager = VideoManager(
             media_dir=media_dir,
             cache_dir=cache_dir,
             tools_dir=tools_dir,
-            sprite_builder_manager=sprite_builder,
+            force_timestamp=args.force_timestamp_from_filename,
         )
 
         transcoder_manager = TranscoderManager(
@@ -167,7 +162,7 @@ def main() -> int:
         )
 
         # Run TUI (blocks until exit)
-        tui = HostTUI(flask_app, args.bind, args.port, transcoder_manager, flask_queue)
+        tui = HostTUI(flask_app, args.bind, args.port, transcoder_manager, flask_queue, video_manager)
         tui.run()
         return 0
 

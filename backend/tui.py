@@ -170,12 +170,13 @@ class HostTUI(App):
         ("escape", "quit", "Quit"),
     ]
 
-    def __init__(self, flask_app: Flask, flask_bind: str, flask_port: int, transcoder_manager: TranscoderManager, flask_queue: queue.Queue[str]):
+    def __init__(self, flask_app: Flask, flask_bind: str, flask_port: int, transcoder_manager: TranscoderManager, flask_queue: queue.Queue[str], video_manager):
         super().__init__()
         self._flask_app = flask_app
         self._flask_bind = flask_bind
         self._flask_port = flask_port
         self._transcoder_manager = transcoder_manager
+        self._video_manager = video_manager
 
         # Queue receiving all backend log records (Flask + initialization)
         self._flask_queue: queue.Queue[str] = flask_queue
@@ -214,6 +215,9 @@ class HostTUI(App):
             # Start background threads
             self._should_stop = threading.Event()
 
+            # Initialize VideoManager now that TUI is visible
+            self._initialize_video_manager()
+
             # Start Flask server in a separate thread
             self._flask_thread = threading.Thread(
                 target=self._run_flask,
@@ -243,6 +247,45 @@ class HostTUI(App):
             else:
                 print(error_msg, file=sys.stderr)
             # Re-raise to ensure the TUI shuts down
+            raise
+
+    def _initialize_video_manager(self):
+        """Initialize VideoManager with output captured to backend log."""
+        try:
+            # Capture stdout/stderr during VideoManager initialization
+            # (TUI context interferes with global redirection from host.py)
+            original_stdout = sys.stdout
+            original_stderr = sys.stderr
+            
+            # Reuse the same stream capture pattern as host.py
+            class _StreamToQueue(io.TextIOBase):
+                def __init__(self, q: queue.Queue[str]):
+                    super().__init__()
+                    self._q = q
+
+                def write(self, s: str):
+                    if s.strip():
+                        self._q.put(s.rstrip("\n"))
+                    return len(s)
+            
+            # Redirect output to flask_queue
+            capture = _StreamToQueue(self._flask_queue)
+            sys.stdout = capture
+            sys.stderr = capture
+            
+            try:
+                # Initialize VideoManager (heavy operations)
+                self._video_manager.initialize()
+            finally:
+                # Always restore original stdout/stderr
+                sys.stdout = original_stdout
+                sys.stderr = original_stderr
+                
+        except Exception as e:
+            # Ensure any VideoManager initialization errors go to backend log
+            error_msg = f"VideoManager initialization failed: {str(e)}\n{traceback.format_exc()}"
+            self._flask_queue.put(error_msg)
+            # Re-raise to prevent Flask from starting with uninitialized VideoManager
             raise
 
     def _run_flask(self):
@@ -436,7 +479,7 @@ class HostTUI(App):
                     if 'status update' in line:
                         # Print the raw status line for debugging
                         # self.transcoder_log.write(line)
-                        
+
                         # Parse and process the status update
                         status_info = parse_status_update_log(line)
                         self.segment_map.clear()
