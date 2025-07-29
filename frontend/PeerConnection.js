@@ -169,14 +169,13 @@ export class PeerConnection {
         this._wasConnected = true;
         // Attach close/error handlers for lifecycle events
         conn.on('close', () => {
-            if (this._wasConnected) {
+            if (this._wasConnected && !this._destroying) {
                 console.log('[Peer] Connection closed gracefully');
+                // Reset connection state
+                this.connection = null;
+                this._wasConnected = false;
+                // Emit disconnection event and let Core.js handle reconnection
                 bus.emit('peerDisconnected');
-                // Re-enter connection establishment flow after graceful disconnect
-                setTimeout(() => {
-                    console.log('[Peer] Re-entering connection establishment flow');
-                    this.initializePeerConnection();
-                }, 250);
             }
         });
         conn.on('error', (err) => {
@@ -198,7 +197,6 @@ export class PeerConnection {
     }
 
     async _shutdownPeer() {
-        this._destroying = true;
         if (this.connection) {
             try { this.connection.close(); } catch (e) {}
             this.connection = null;
@@ -241,7 +239,7 @@ export class PeerConnection {
 
         this.connection.on('data', (data) => {
             if (data.type === 'config') {
-                console.log('Received config from peer:', data.config);
+                console.log('[Peer] Received config from peer:', data.config);
                 bus.emit('peerConfig', data.config);
             } else if (data.type === 'command') {
                 // Concise inbound sync logging
@@ -257,10 +255,13 @@ export class PeerConnection {
      */
     sendConfig() {
         if (this.connection?.open) {
+            console.log('[Peer] Sending config to peer:', this.localConfig);
             this.connection.send({
                 type: 'config',
                 config: this.localConfig
             });
+        } else {
+            console.warn('[Peer] Cannot send config: connection not open');
         }
     }
 
@@ -291,6 +292,7 @@ export class PeerConnection {
      * Disconnects from the peer and cleans up resources
      */
     disconnect() {
+        this._destroying = true;
         if (this.connection) {
             this.connection.close();
             this.connection = null;

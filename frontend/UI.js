@@ -110,7 +110,7 @@ export class UI {
     setupScrubber(localConfig, remoteConfig, totalDuration) {
         // Clean up existing scrubber if any
         if (this.scrubber) {
-            this.scrubber.cleanup();
+            this.scrubber.destroy();
         }
 
         // Initialize scrubber

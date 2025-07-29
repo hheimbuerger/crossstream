@@ -33,6 +33,26 @@ export class SynchronizationEngine {
         bus.on('playersInitialized', this.handlePlayersInitialized);
     }
 
+    /**
+     * Clean up event listeners and resources
+     */
+    destroy() {
+        // Remove LOCAL command listeners
+        bus.off('localPlay', this.handleLocalPlay);
+        bus.off('localPause', this.handleLocalPause);
+        bus.off('localSeek', this.handleLocalSeek);
+        bus.off('localSeekRelative', this.handleLocalSeekRelative);
+        bus.off('localAudioChange', this.handleLocalAudioChange);
+
+        // Remove REMOTE command listeners
+        bus.off('remotePlay', this.handleRemotePlay);
+        bus.off('remotePauseSeek', this.handleRemotePauseSeek);
+        bus.off('remoteAudioChange', this.handleRemoteAudioChange);
+        
+        // Remove player initialization listener
+        bus.off('playersInitialized', this.handlePlayersInitialized);
+    }
+
     // --- Local Event Handlers ---------------------------------------------------
 
     handleLocalPlay = () => {

@@ -16,6 +16,7 @@ let peerConnection = null;
 let dualVideoPlayer = null;
 let ui = null;
 let syncEngine = null;
+let isManuallyReconnecting = false;
 
 // --- PeerConnection Setup ---
 function setupPeerConnection(localConfig) {
@@ -45,8 +46,47 @@ function setupPeerConnection(localConfig) {
 
     // Handle graceful disconnects
     const onPeerDisconnected = () => {
-        ui.showError('Connection to peer closed. Waiting for reconnection...');
-        cleanup();
+        // Prevent duplicate reconnection attempts
+        if (isManuallyReconnecting) {
+            console.log('[Core] Ignoring disconnection event during manual reconnection');
+            return;
+        }
+        
+        console.log('[Core] Peer disconnected, pausing videos and showing connection modal');
+        // Pause videos if they exist
+        if (dualVideoPlayer) {
+            dualVideoPlayer.pause();
+        }
+        // Show connecting modal instead of error
+        ui.showLoading('Connecting to peer...');
+        // Clean up the dual video player but keep UI elements
+        if (dualVideoPlayer) {
+            dualVideoPlayer.destroy();
+            dualVideoPlayer = null;
+        }
+        if (syncEngine) {
+            syncEngine.destroy();
+            syncEngine = null;
+        }
+        
+        // Set flag to prevent duplicate reconnection attempts
+        isManuallyReconnecting = true;
+        
+        // Restart peer connection after a delay to allow for clean shutdown
+        setTimeout(() => {
+            console.log('[Core] Restarting peer connection after disconnect');
+            // Get the local config again
+            loadConfig().then(localConfig => {
+                setupPeerConnection(localConfig);
+                // Reset flag after successful setup
+                isManuallyReconnecting = false;
+            }).catch(err => {
+                console.error('[Core] Failed to restart peer connection:', err);
+                ui.showError('Failed to restart connection: ' + err.message);
+                // Reset flag even on error
+                isManuallyReconnecting = false;
+            });
+        }, 500);
     };
 
     bus.on('peerConfig', onPeerConfig);
@@ -83,6 +123,9 @@ function setupDualVideoPlayer(localConfig, remoteConfig) {
             remoteConfig
         );
 
+        // Create SynchronizationEngine to handle UI events and remote synchronization
+        syncEngine = new SynchronizationEngine(() => dualVideoPlayer, () => peerConnection);
+
         // Hide loading indicator now that setup is complete
         ui.hideLoading();
 
@@ -116,9 +159,6 @@ async function initializeApp() {
     try {
         // Initialize UI (event handling uses central EventBus now)
         ui = new UI();
-
-        // set up SynchronizationEngine
-        syncEngine = new SynchronizationEngine(() => dualVideoPlayer, () => peerConnection);
 
         // Load configuration and initialize peer connection
         const localConfig = await loadConfig();
