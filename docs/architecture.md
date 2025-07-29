@@ -377,6 +377,136 @@ The **Synchronization Engine** is the top-level component that ensures two *sets
 The winning command is emitted on the global `EventBus` with event names prefixed by `remote` (e.g., `remotePlay`, `remotePauseSeek`, `remoteAudioChange`). The **Synchronization Engine** listens to these events to update local playback state accordingly.
 
 
+## Backend Architecture
+
+The backend provides HLS video streaming, transcoding services, and a TUI for monitoring. The architecture follows a clean separation of concerns with centralized error handling and minimal exception catching.
+
+### Core Components
+
+#### host.py - Application Orchestrator
+**Responsibilities:**
+- Application entry point and argument parsing
+- Central exception handling for the entire application
+- Stream redirection management using `StreamRedirection` context manager
+- ServiceOrchestrator lifecycle management
+- TUI initialization and error display
+
+**Key Features:**
+- **Central Error Handling**: Single point for catching and displaying fatal errors
+- **Stream Redirection**: Captures stdout/stderr to queues for TUI display while preserving original streams for error output
+- **Clean Shutdown**: Ensures proper cleanup of all services and stream restoration
+- **Terminal Reset**: Automatic terminal state restoration on exit
+
+#### service_orchestrator.py - Backend Service Manager
+**Responsibilities:**
+- Backend service lifecycle management (Flask server, transcoder)
+- Thread coordination and management
+- Log processing and UI widget updates
+- Business logic for status parsing and segment map rendering
+
+**Key Components:**
+- **ServiceOrchestrator Class**: Main orchestration class
+- **parse_status_update_log()**: Parses transcoder status updates for segment map display
+- **render_segment_map()**: Renders colored segment maps using Rich markup
+
+**Service Management:**
+- Flask server thread with logging capture
+- Transcoder output capture thread
+- VideoManager initialization with output redirection
+- Log draining and UI widget updates
+
+**Design Principles:**
+- **Minimal Exception Handling**: Exceptions bubble up to host.py for central handling
+- **Clean Thread Management**: Proper thread lifecycle and cleanup
+- **UI Separation**: No UI logic, only provides data to TUI widgets
+
+#### tui.py - Terminal User Interface
+**Responsibilities:**
+- Pure UI layer for displaying logs and segment maps
+- Widget management and layout
+- User interaction handling (quit command)
+
+**Key Features:**
+- **Pure UI Focus**: No business logic, error handling, or service management
+- **Widget Configuration**: Proper RichLog setup with markup support for colored segments
+- **Minimal Codebase**: Reduced from 400+ lines to ~140 lines
+- **Clean Imports**: Only imports what it actually uses (Textual components)
+
+**UI Layout:**
+- Backend Log: Flask server and application logs
+- Transcoder Log: FFmpeg transcoder output
+- Segment Map: Colored visualization of video segments
+- Stats Line: Real-time transcoding statistics
+
+#### web.py - Flask Application
+**Responsibilities:**
+- HTTP server for video streaming
+- API endpoints for video access
+- Static file serving
+
+**Separation from Host:**
+- Moved from host.py for better modularity
+- Independent Flask app configuration
+- Clean separation of web concerns from orchestration
+
+### Data Flow
+
+#### Backend Service Startup
+1. `host.py` parses arguments and creates ServiceOrchestrator
+2. ServiceOrchestrator initializes VideoManager with output capture
+3. Flask server starts in background thread with logging capture
+4. Transcoder starts with output capture to internal queue
+5. TUI initializes and connects to ServiceOrchestrator for log draining
+
+#### Log Processing Flow
+1. Backend services (Flask, transcoder, print statements) output to queues
+2. ServiceOrchestrator drains queues periodically (100ms intervals)
+3. Flask logs: ANSI colors stripped, formatted, sent to Backend Log widget
+4. Transcoder logs: Status updates parsed for segment map, regular logs sent to Transcoder Log widget
+5. Segment map updates: Colored segments rendered and displayed
+6. Stats updates: Real-time statistics displayed in stats line
+
+#### Error Handling Flow
+1. Exceptions in backend services bubble up (no broad catching)
+2. Fatal errors caught in host.py main function
+3. Stream redirection ensures error output goes to real console
+4. TUI shutdown displays errors after terminal restoration
+5. Clean application exit with proper resource cleanup
+
+### Queue Management
+
+#### output_log_queue
+- **Purpose**: Unified log collection from all backend sources
+- **Sources**: Flask logs, print statements, VideoManager output, error messages
+- **Processing**: ANSI color stripping, formatting, display in Backend Log
+- **Thread Safety**: Queue-based communication between threads
+
+#### _transcoder_queue (Internal)
+- **Purpose**: Transcoder-specific output processing
+- **Sources**: FFmpeg stdout/stderr
+- **Processing**: Status update detection, segment map parsing, regular log display
+- **Special Handling**: Status updates trigger segment map and stats updates
+
+### Architecture Principles
+
+#### Clean Separation of Concerns
+- **host.py**: Orchestration and error handling only
+- **service_orchestrator.py**: Backend service management and business logic
+- **tui.py**: Pure UI with no business logic or error handling
+- **web.py**: HTTP server concerns only
+
+#### Minimal Exception Handling
+- Exceptions bubble up to central handler in host.py
+- No broad `except Exception` blocks in service layers
+- Clean error propagation and visibility
+- Fatal errors cause clean application exit
+
+#### Thread Safety
+- Queue-based communication between threads
+- Proper thread lifecycle management
+- Clean shutdown coordination
+- No shared mutable state between threads
+
 ## Data Flow
 
 ### UI Data Flow
