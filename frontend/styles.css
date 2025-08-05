@@ -437,6 +437,59 @@ body {
     color: #FF6347;
 }
 
+.pulse-remote {
+    animation: pulse-blue 0.5s ease-in-out;
+}
+
+@keyframes pulse-blue {
+    0% {
+        box-shadow: 0 0 0 0 rgba(33, 150, 243, 0.7);
+    }
+    70% {
+        box-shadow: 0 0 0 10px rgba(33, 150, 243, 0);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(33, 150, 243, 0);
+    }
+}
+
+/* Loading state for play/pause button */
+.loading {
+    opacity: 0.7;
+    cursor: wait;
+}
+
+.loading:hover {
+    opacity: 0.8;
+}
+
+/* Remote readiness indicator */
+#remote-readiness-indicator {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background-color: rgba(255, 193, 7, 0.9);
+    color: #333;
+    padding: 8px 16px;
+    border-radius: 4px;
+    font-size: 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    z-index: 1000;
+    display: none;
+    animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
 /* --- Remote Pulse Animation --- */
 @keyframes pulse-remote {
     0% {

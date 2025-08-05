@@ -1,6 +1,6 @@
 /**
  * DualVideoPlayer
- * 
+ *
  * Handles frame-accurate synchronization between two HLS video streams.
  * Manages playback state, seeking, and audio routing between the streams.
  */
@@ -11,7 +11,12 @@ export class DualVideoPlayer {
      * Timeout in milliseconds to wait for videos to be ready for playback
     */
      #PLAY_READY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-    
+
+    /**
+     * Buffer lookahead requirement in seconds for smooth playback
+     */
+    #BUFFER_LOOKAHEAD_SECONDS = 2;
+
     // State
     state = 'paused'; // 'paused' | 'ready' | 'playing'
     audioSource = 'none'; // 'none' | 'local' | 'remote'
@@ -19,15 +24,19 @@ export class DualVideoPlayer {
     #syncInterval = null;
     #timeUpdateRaf = null;
     #lastEmittedSecond = null;
-    
+
+    // Buffer monitoring
+    #bufferMonitorInterval = null;
+    #lastBufferCheck = { local: true, remote: true }; // Track buffer state changes
+
     // Video elements
     localVideo = null;
     remoteVideo = null;
-    
+
     // HLS instances
     localHls = null;
     remoteHls = null;
-    
+
     // Timeline and playhead management
     #timelineStart = 0;  // Start time of the unified timeline (ms since epoch)
     #timelineEnd = 0;    // End time of the unified timeline (ms since epoch)
@@ -35,7 +44,7 @@ export class DualVideoPlayer {
     #remoteStartTime = 0; // Remote video start time (ms since epoch)
     #totalDuration = 0;   // Total duration of the unified timeline (seconds)
     timeOffset = 0;       // Time offset between local and remote videos (seconds)
-    
+
     /**
      * Updates the unified timeline based on current video metadata
      * @private
@@ -43,13 +52,13 @@ export class DualVideoPlayer {
     #updateTimeline() {
         const localEndTime = this.#localStartTime + (this.localVideo.duration * 1000);
         const remoteEndTime = this.#remoteStartTime + (this.remoteVideo.duration * 1000);
-        
+
         // Unified timeline spans from earliest start to latest end
         this.#timelineStart = Math.min(this.#localStartTime, this.#remoteStartTime);
         this.#timelineEnd = Math.max(localEndTime, remoteEndTime);
         this.#totalDuration = (this.#timelineEnd - this.#timelineStart) / 1000;
     }
-    
+
     /**
      * Gets the position of the first shared frame in the unified timeline
      * @returns {number} Position of first shared frame in the unified timeline
@@ -59,7 +68,7 @@ export class DualVideoPlayer {
         const firstSharedTime = Math.max(this.#localStartTime, this.#remoteStartTime);
         return (firstSharedTime - this.#timelineStart) / 1000;
     }
-    
+
     /**
      * Gets the current playhead (seconds) in the unified timeline
      * @returns {number} Playhead in seconds
@@ -67,7 +76,7 @@ export class DualVideoPlayer {
     getPlayhead() {
         return this.getUnifiedTimeFromVideo(this.localVideo.currentTime, 'local');
     }
-    
+
     /**
      * Seeks to a specific playhead (seconds) in the unified timeline
      * @param {number} playhead - Playhead in seconds
@@ -94,7 +103,7 @@ export class DualVideoPlayer {
 
         this.#emitState();
     }
-    
+
     /**
      * Converts a video's current time to a unified timeline time
      * @param {number} currentTime - Current time of the video in seconds
@@ -107,7 +116,7 @@ export class DualVideoPlayer {
         const timelineMs = startTime + (currentTime * 1000);
         return (timelineMs - this.#timelineStart) / 1000;
     }
-    
+
     /**
      * Converts a unified timeline time to a specific video's time
      * @param {number} unifiedTime - Unified timeline time in seconds
@@ -120,7 +129,7 @@ export class DualVideoPlayer {
         const startTime = target === 'local' ? this.#localStartTime : this.#remoteStartTime;
         return (timelineMs - startTime) / 1000;
     }
-    
+
     /**
      * @param {HTMLVideoElement} localVideo - Video element for the local stream
      * @param {Object} localConfig - Configuration for the local video stream
@@ -138,28 +147,28 @@ export class DualVideoPlayer {
         if (!localConfig?.stream || !remoteConfig?.stream) {
             throw new Error('Both local and remote configs with stream URLs are required');
         }
-        
+
         // Store video elements and configurations
         this.localVideo = localVideo;
         this.remoteVideo = remoteVideo;
-        
+
         // Parse start times from ISO timestamps
         this.#localStartTime = new Date(localConfig.timestamp).getTime();
         this.#remoteStartTime = new Date(remoteConfig.timestamp).getTime();
-        
+
         // Initialize video elements (muted by default)
         this.localVideo.muted = true;
         this.remoteVideo.muted = true;
-        
+
         // Calculate time offset (in seconds)
         this.timeOffset = this.#calculateTimeOffset(localConfig.timestamp, remoteConfig.timestamp);
-        
+
         // Initialize players with configs
         this.#initializePlayers(localConfig, remoteConfig);
-        
+
         // Set up event listeners for state management
         this.#setupEventListeners();
-        
+
         // Bind methods
         this.play = this.play.bind(this);
         this.pause = this.pause.bind(this);
@@ -172,11 +181,11 @@ export class DualVideoPlayer {
     #calculateTimeOffset(localTimestamp, remoteTimestamp) {
         const localStart = new Date(localTimestamp);
         const remoteStart = new Date(remoteTimestamp);
-        
+
         if (isNaN(localStart.getTime()) || isNaN(remoteStart.getTime())) {
             throw new Error('Invalid timestamp format. Must be valid ISO 8601 strings');
         }
-        
+
         return (remoteStart - localStart) / 1000; // Convert ms to seconds
     }
 
@@ -184,10 +193,10 @@ export class DualVideoPlayer {
         try {
             // Initialize local video
             await this.#initializeHlsPlayer(localConfig.stream, this.localVideo, 'local');
-            
+
             // Initialize remote video
             await this.#initializeHlsPlayer(remoteConfig.stream, this.remoteVideo, 'remote');
-            
+
             // Wait for both videos to have metadata loaded
             await Promise.all([
                 new Promise(resolve => {
@@ -201,7 +210,7 @@ export class DualVideoPlayer {
             ]);
 
             this.#updateTimeline();
-            
+
             // Let the SynchronizationEngine handle seeking to the first shared frame
             bus.emit('playersInitialized', {
                 playhead: this.getPlayhead(),
@@ -254,15 +263,15 @@ export class DualVideoPlayer {
 
     #checkVideoSynchronization() {
         if (this.state !== 'playing') return;
-        
+
         const localTime = this.localVideo.currentTime;
         const remoteTime = this.remoteVideo.currentTime + this.timeOffset;
         const diff = Math.abs(localTime - remoteTime);
-        
+
         if (diff > 0.1) { // 100ms threshold
             console.warn(`Videos out of sync by ${diff.toFixed(3)}s`);
         }
-        
+
         // Log timeline information for debugging
         console.debug('Timeline:', {
             start: new Date(this.#timelineStart).toISOString(),
@@ -273,21 +282,98 @@ export class DualVideoPlayer {
         });
     }
 
+    /**
+     * Checks if a video element has sufficient buffer for current playback position
+     * @param {HTMLVideoElement} video - Video element to check
+     * @returns {boolean} True if video is sufficiently buffered
+     * @private
+     */
+    #isVideoBuffered(video) {
+        // Check if video has sufficient readyState
+        if (video.readyState < 3) return false;
+
+        // Check buffered ranges for current position
+        const currentTime = video.currentTime;
+        const buffered = video.buffered;
+
+        for (let i = 0; i < buffered.length; i++) {
+            const start = buffered.start(i);
+            const end = buffered.end(i);
+
+            // If current position is within a buffered range with some lookahead
+            if (currentTime >= start && currentTime + this.#BUFFER_LOOKAHEAD_SECONDS <= end) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Monitors buffer state during playback and emits events when buffer runs out
+     * @private
+     */
+    #monitorBufferDuringPlayback() {
+        if (this.state !== 'playing') return;
+
+        const localBuffered = this.#isVideoBuffered(this.localVideo);
+        const remoteBuffered = this.#isVideoBuffered(this.remoteVideo);
+
+        // If either video runs out of buffer during playback, emit buffering events
+        const localBufferingStarted = !localBuffered && this.#lastBufferCheck.local;
+        const remoteBufferingStarted = !remoteBuffered && this.#lastBufferCheck.remote;
+
+        if (localBufferingStarted || remoteBufferingStarted) {
+            const bufferingVideos = [];
+            if (localBufferingStarted) bufferingVideos.push('local');
+            if (remoteBufferingStarted) bufferingVideos.push('remote');
+
+            console.log(`[DVP] Video buffer depleted during playback: ${bufferingVideos.join(', ')}`);
+            bus.emit('bufferingStarted', { videos: bufferingVideos });
+        }
+
+        // If both videos have restored buffer, emit buffering complete
+        const localBufferingComplete = localBuffered && !this.#lastBufferCheck.local;
+        const remoteBufferingComplete = remoteBuffered && !this.#lastBufferCheck.remote;
+
+        if ((localBufferingComplete || remoteBufferingComplete) && localBuffered && remoteBuffered) {
+            console.log('[DVP] Video buffer restored, ready to resume playback');
+            bus.emit('bufferingComplete');
+        }
+
+        // Update last known buffer state
+        this.#lastBufferCheck.local = localBuffered;
+        this.#lastBufferCheck.remote = remoteBuffered;
+    }
+
     #setupEventListeners() {
         const updateReadyState = () => {
             // console.log('updateReadyState', this.state, this.localVideo.readyState, this.remoteVideo.readyState);
-            if (this.state === 'paused' && 
-                this.localVideo.readyState >= 3 && 
+            if (this.state === 'paused' &&
+                this.localVideo.readyState >= 3 &&
                 this.remoteVideo.readyState >= 3) {
                 this.state = 'ready';
                 this.#emitState();
             }
         };
 
-        // Add event listeners for video ready state
-        const events = ['canplay', 'seeked'];
+        // Enhanced readiness detection - monitor buffer state changes
+        const checkBufferState = () => {
+            const localBuffered = this.#isVideoBuffered(this.localVideo);
+            const remoteBuffered = this.#isVideoBuffered(this.remoteVideo);
+
+            // Update buffer state tracking
+            this.#lastBufferCheck.local = localBuffered;
+            this.#lastBufferCheck.remote = remoteBuffered;
+
+            // Update overall readiness
+            updateReadyState();
+        };
+
+        // Add event listeners for video ready state and buffer changes
+        const events = ['canplay', 'seeked', 'waiting', 'canplaythrough', 'stalled'];
         this._videoEventHandlers = events.map(event => {
-            const handler = updateReadyState.bind(this);
+            const handler = checkBufferState.bind(this);
             this.localVideo.addEventListener(event, handler);
             this.remoteVideo.addEventListener(event, handler);
             return { event, handler };
@@ -363,17 +449,17 @@ export class DualVideoPlayer {
                 onStateChange({ state: 'ready' });
             }
         });
-        
+
         return this.#playOnceReadyPromise;
     }
-    
+
     /**
      * Play the videos
      * @returns {Promise<void>}
      */
     async play() {
         if (this.state === 'playing') return;
-        
+
         if (this.state !== 'ready') {
             throw new Error('Cannot play: One or both videos are not ready for playback');
         }
@@ -382,16 +468,21 @@ export class DualVideoPlayer {
             // Start both videos in parallel
             const localPlay = this.localVideo.play();
             const remotePlay = this.remoteVideo.play();
-            
+
             // Wait for both to start playing
             await Promise.all([localPlay, remotePlay]);
-            
+
             this.state = 'playing';
-            
+
             // Set up sync monitoring
             this.#syncInterval = setInterval(() => {
                 this.#checkVideoSynchronization();
             }, 1000);
+
+            // Set up buffer monitoring during playback
+            this.#bufferMonitorInterval = setInterval(() => {
+                this.#monitorBufferDuringPlayback();
+            }, 500); // Check buffer every 500ms during playback
 
             // Start per-frame timeUpdate emission
             this.#lastEmittedSecond = null;
@@ -406,17 +497,17 @@ export class DualVideoPlayer {
                 this.#timeUpdateRaf = requestAnimationFrame(emitTimeUpdateLoop);
             };
             this.#timeUpdateRaf = requestAnimationFrame(emitTimeUpdateLoop);
-            
+
             // Emit state update
             this.#emitState();
-            
+
         } catch (error) {
             console.error('Playback failed:', error);
             this.pause();
             throw error;
         }
     }
-    
+
     pause() {
         if (this.#timeUpdateRaf) {
             cancelAnimationFrame(this.#timeUpdateRaf);
@@ -424,16 +515,20 @@ export class DualVideoPlayer {
         }
         this.#lastEmittedSecond = null;
         if (this.state === 'paused' || this.state === 'ready') return;
-        
+
         // Clear any pending playOnceReady
         if (this.#playOnceReadyPromise) {
             this.#playOnceReadyPromise = null;
         }
-        
+
         clearInterval(this.#syncInterval);
+        if (this.#bufferMonitorInterval) {
+            clearInterval(this.#bufferMonitorInterval);
+            this.#bufferMonitorInterval = null;
+        }
         this.localVideo.pause();
         this.remoteVideo.pause();
-        
+
         // If videos are still ready, go to 'ready' state, otherwise 'paused'
         if (this.localVideo.readyState >= 3 && this.remoteVideo.readyState >= 3) {
             this.state = 'ready';
@@ -451,7 +546,7 @@ export class DualVideoPlayer {
         this.audioSource = source;
         this.localVideo.muted = (source !== 'local');
         this.remoteVideo.muted = (source !== 'remote');
-        
+
         // Emit state change to update UI
         this.#emitState();
     }
@@ -462,13 +557,17 @@ export class DualVideoPlayer {
             clearInterval(this.#syncInterval);
             this.#syncInterval = null;
         }
+        if (this.#bufferMonitorInterval) {
+            clearInterval(this.#bufferMonitorInterval);
+            this.#bufferMonitorInterval = null;
+        }
         if (this.#timeUpdateRaf) {
             cancelAnimationFrame(this.#timeUpdateRaf);
             this.#timeUpdateRaf = null;
         }
         this.#lastEmittedSecond = null;
     }
-    
+
     // Get current state
     getState() {
         const playhead = this.getPlayhead();

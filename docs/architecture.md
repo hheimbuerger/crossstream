@@ -67,20 +67,82 @@ CrossStream uses a **single, centralized event bus** powered by the `mitt` libra
 
 ### Core Bus Events
 
+#### Remote Commands (sent between peers)
+These commands are sent via the WebRTC data channel and trigger corresponding events on the remote peer.
+
+| Event | Emitted By | Payload | Purpose |
+|-------|------------|---------|---------|
+| `playIntent` | SynchronizationEngine | `{ type: 'playIntent', playhead: number }` | Request to start playback at specific position |
+| `playReady` | SynchronizationEngine | `{ type: 'playReady', playhead: number }` | Response to `playIntent` when ready to play |
+| `playNotReady` | SynchronizationEngine | `{ type: 'playNotReady', playhead: number }` | Response to `playIntent` when not ready to play |
+| `pauseIntent` | SynchronizationEngine | `{ type: 'pauseIntent', playhead: number }` | Request to pause playback |
+| `seekIntent` | SynchronizationEngine | `{ type: 'seekIntent', playhead: number }` | Request to seek to specific position |
+| `seekComplete` | SynchronizationEngine | `{ type: 'seekComplete', playhead: number }` | Sent after completing a seek operation, indicates the final playhead position |
+| `bufferingStarted` | SynchronizationEngine | `{ type: 'bufferingStarted' }` | Notification that buffering started |
+| `bufferingComplete` | SynchronizationEngine | `{ type: 'bufferingComplete' }` | Notification that buffering completed |
+| `audioChange` | SynchronizationEngine | `{ type: 'audioChange', track: 'local'\|'remote'\|'none' }` | Audio source changed |
+
+#### Command Flow Examples
+
+1. **Playback Start**
+   - Peer A: `playIntent @10.5s` → Peer B
+   - Peer B: `playReady @10.5s` → Peer A
+   - Both peers start playback
+
+2. **Seek Operation**
+   - Peer A: `seekIntent @30.0s` → Peer B
+   - Peer B seeks to 30.0s
+   - Peer B: `seekComplete @30.0s` → Peer A
+   - Both peers are now paused at 30.0s
+
+3. **Buffering**
+   - Peer A: `bufferingStarted` → Peer B
+   - Peer B pauses playback
+   - Peer A: `bufferingComplete` → Peer B
+   - Playback resumes when both peers are ready
+
+#### Internal Bus Events
+These events are used for communication within the same browser context.
+
 | Event | Emitted By | Payload | Purpose |
 |-------|------------|---------|---------|
 | `localPlay` | UI | *none* | User pressed play |
-| `localPause` | UI | *none* | User pressed pause (also emitted before a scrubber seek) |
-| `localSeek` | UI/Scrubber | `playhead` (seconds) | Absolute seek while paused |
-| `localSeekRelative` | UI | `delta` (seconds) | ± seek buttons while paused |
-| `localAudioChange` | UI | `track` ('local'\|'remote'\|'none') | Switch active audio track (local / remote / mute) |
-| `remotePlay` | PeerConnection | `{ playhead }` | Remote peer play |
-| `remotePauseSeek` | PeerConnection | `{ playhead }` | Remote peer paused & sought (single message) |
-| `remoteAudioChange` | PeerConnection | `{ track }` | Remote peer audio change (values: 'local'|'remote'|'none') |
-| `timeUpdate` | DualVideoPlayer | `playhead` (seconds), `duration` (s) | Continuous timeline updates |
-| `stateChange` | DualVideoPlayer | `{ state, playhead, duration, audioSource }` | Changes in playback state |
-| `peerDisconnected` | PeerConnection | *none* | Emitted only after a full connection was established and then closed gracefully (user-initiated or normal close). Used for graceful disconnects and UI cleanup/reconnection logic. |
-| `peerTerminated` | PeerConnection | `Error` | Emitted when the peer connection is lost ungracefully or due to an error (unexpected disconnect, error, or network failure). Used for UI error handling and cleanup. Listened for in Core.js. |
+| `localPause` | UI | *none* | User pressed pause |
+| `localSeek` | UI/Scrubber | `playhead` (seconds) | Absolute seek |
+| `localSeekRelative` | UI | `delta` (seconds) | Relative seek (± seconds) |
+| `localAudioChange` | UI | `track` ('local'\|'remote'\|'none') | Audio track change |
+| `stateChange` | DualVideoPlayer | `{ state: string, playhead: number, duration: number, audioSource: string }` | Playback state changed |
+| `syncStateChanged` | SynchronizationEngine | `{ state: 'paused'\|'buffering'\|'pendingPlay'\|'playing'\|'pendingSeek', playhead?: number, bufferingVideos?: string[] }` | Sync state changed |
+| `timeUpdate` | DualVideoPlayer | `{ playhead: number, duration: number }` | Playhead position update |
+| `playersInitialized` | DualVideoPlayer | `{ playhead: number, duration: number, localConfig: Object, remoteConfig: Object }` | Both players ready |
+| `uiPulse` | Various | `{ elementId: string }` | Highlight UI element |
+| `bufferingStarted` | DualVideoPlayer | `{ videos: string[] }` | Video buffering started |
+| `bufferingComplete` | DualVideoPlayer | *none* | Buffering completed |
+| `peerDisconnected` | PeerConnection | *none* | Graceful peer disconnect |
+| `peerTerminated` | PeerConnection | `Error` | Unexpected peer disconnect |
+
+### State Change Flow
+
+#### `stateChange` vs `syncStateChanged`
+
+- **stateChange** (DualVideoPlayer):
+  - Tracks actual video element states (playing/paused)
+  - Used for UI updates and local state management
+  - More frequent updates during playback
+  - Example: `{ state: 'playing', playhead: 123, duration: 3600, audioSource: 'local' }`
+
+- **syncStateChanged** (SynchronizationEngine):
+  - Tracks synchronization state between peers
+  - Used for coordination and handshaking
+  - Changes only on state transitions
+  - Example: `{ state: 'pendingPlay', playhead: 123 }`
+
+#### Typical Flow:
+1. User clicks play → `localPlay` event
+2. If buffering needed → `syncState` becomes 'buffering'
+3. When ready → `syncState` becomes 'pendingPlay', send `playIntent`
+4. Remote responds → `syncState` becomes 'playing', send `playReady`
+5. Both peers → `stateChange` to 'playing'
 
 All new functionality must use these bus events; legacy callback fields have been removed.
 
@@ -203,6 +265,35 @@ The timeline scrubber represents this unified timeline, allowing users to:
 - Seek to any position in the unified timeline
 - View thumbnails from the appropriate video for the current position
 
+## DualVideoPlayer
+
+### Buffer Monitoring
+The DualVideoPlayer implements comprehensive buffer monitoring to support synchronized buffering between peers:
+
+**Enhanced Readiness Detection:**
+- Monitors video `readyState` and buffered ranges for both local and remote videos
+- Emits `localVideoBuffered`/`localVideoUnbuffered` and `remoteVideoBuffered`/`remoteVideoUnbuffered` events when buffer state changes
+- Listens to additional video events: `waiting`, `canplaythrough`, `stalled` for more responsive buffer detection
+
+**Playback Buffer Monitoring:**
+- During `playing` state, continuously monitors buffer health every 500ms
+- Detects when videos run out of buffer during playback (insufficient lookahead)
+- Emits `bufferingStarted` events when buffer depletion occurs
+- Emits `bufferingComplete` events when buffer is restored
+- Uses 2-second lookahead buffer requirement for smooth playback
+
+**Buffer State Tracking:**
+- Maintains `#lastBufferCheck` state to detect buffer state transitions
+- Only emits events when buffer state actually changes (avoids spam)
+- Provides granular per-video buffer status for coordination logic
+
+**Integration with Synchronization:**
+These buffer events enable the SynchronizationEngine to:
+- Coordinate play intent handshakes based on actual buffer readiness
+- Pause both peers when either runs out of buffer during playback
+- Resume synchronized playback once buffering is complete
+- Provide accurate UI feedback about buffering state
+
 ## Unified Playhead
 
 The unified playhead represents the current playback position across the entire timeline, providing a single point of reference that works seamlessly across all video segments. Both videos are always active and synchronized, with their playback positions determined by their respective start times and the unified timeline.
@@ -252,7 +343,7 @@ The PeerConnection handles peer discovery and communication between different cl
 **Responsibilities:**
 - Establish and manage WebRTC peer connections within a session
 - Exchange stream configurations between peers
-- Relay playback commands (play, pauseSeek, audioChange) between connected clients
+- Relay playback commands (play, pause, seek, audioChange) between connected clients
 - Handle connection lifecycle and error scenarios
 - Manage resource cleanup on disconnection
 
@@ -273,8 +364,8 @@ The PeerConnection handles peer discovery and communication between different cl
 {
   "type": "command",
   "command": {
-    "type": "play" | "pauseSeek" | "audioChange",   // operation
-    "playhead": number,               // unified playhead (for pauseSeek)
+    "type": "play" | "pause" | "seek" | "audioChange",   // operation
+    "playhead": number,               // current playhead position
     "clock": { "<peerId>": number }, // vector clock map
     "senderId": string                // peerId of originator
   }
@@ -319,7 +410,7 @@ The DualVideoPlayer is responsible for maintaining frame-accurate synchronizatio
 
 **Inputs:**
 - Local and remote stream configurations (containing stream URLs and timestamps)
-- Playback control commands (play, pauseSeek, seek)
+- Playback control commands (play, pause, seek)
 - Audio source selection
 
 **Outputs:**
@@ -348,15 +439,125 @@ The **Synchronization Engine** is the top-level component that ensures two *sets
 * *Event Propagation*: All playback-affecting user actions (play, pause, seek, audio change, rewind/fast-forward) are immediately propagated to the other peer.
 * *Loose Consistency*: The goal is not perfect frame-accurate sync, but to keep both sides in the same logical state (playing/paused/position), tolerating minor network delays and conflicts.
 * *Conflict Resolution*: When conflicting commands occur (e.g., both pause and play at the same time), the system resolves to a single, shared state. Which state is chosen is less important than both peers ending up in the same state.
-* *Essential vs. Non-Essential Sync*: Only core playback state (play/pause/seek position) must be strictly synchronized. Non-essential controls (audio track selection, volume) can be loosely synchronized or even independent if needed for UX.
-* *Graceful Handling of Rapid Actions*: The engine must handle rapid, repeated commands (e.g., multiple rewinds) without causing desynchronization or erratic jumps.
 
-**Protocol Sketch**
+## Synchronization Engine
 
-* **Play**: When a peer initiates play, it sends a play command with the current playhead position and timestamp. Both peers wait for their local video players to be ready (using the existing playWhenReady), then start playback together.
-* **Pause+Seek**: Any user pause, scrub, jump, or ± seek action results in a *single* `pauseSeek` command that carries the target unified playhead. Peers pause (if playing) and seek to the position.
-* **Audio Change**: Send an `audioChange` command with the new audio track (`'local'`, `'remote'`, or `'none'`). Receiving peer flips `'local'` ↔ `'remote'`; `'none'` mutes both.
-* **Command Batching**: If multiple commands are issued in rapid succession, batch or coalesce them before sending to avoid excessive network chatter.
+### Overview
+The SynchronizationEngine coordinates playback between local and remote video players by translating user interactions into synchronized commands and handling incoming remote commands. Each peer maintains its own local state and reacts to remote events to achieve synchronized playback.
+
+### Local Synchronization States
+Each peer maintains its own local state. States describe only the local situation and drive local behavior based on local conditions and remote events:
+
+* **`paused`**: Local videos are stopped. No play intent exists. This is the initial state.
+* **`buffering`**: Local videos are loading/buffering content and are not ready for playback (readyState < 3).
+* **`pendingPlay`**: Local user wants to play, local videos are buffered and ready, but waiting for remote peer confirmation before starting playback.
+* **`playing`**: Local videos are actively playing. Playback was started after both local readiness and remote confirmation.
+* **`pendingSeek`**: Local user initiated a seek, local videos are seeking to target position, waiting for remote peer to confirm seek completion.
+
+### State Transitions
+State transitions are triggered by local events (user actions, video readiness changes) and remote events:
+
+**From `paused`:**
+- User presses play → `pendingPlay` (if local videos ready) or `buffering` (if not ready)
+- User seeks → `pendingSeek`
+- Remote `playIntent` received → remain `paused`, send `playNotReady` if not buffered, or `playReady` if buffered
+
+**From `buffering`:**
+- Local videos become ready → `pendingPlay` (if play was intended) or `paused`
+- Remote `playIntent` received → send `playNotReady`
+
+**From `pendingPlay`:**
+- Remote `playReady` received → `playing` (start local playback)
+- Remote `playNotReady` received → remain `pendingPlay`
+- User cancels (pause) → `paused`, send `pauseIntent`
+- Local videos lose buffer → `buffering`, send `bufferingStarted`
+
+**From `playing`:**
+- User pauses → `paused`, send `pauseIntent`
+- User seeks → `pendingSeek`, send `seekIntent`
+- Local videos run out of buffer → `buffering`, send `bufferingStarted`
+- Remote `pauseIntent` received → `paused`
+- Remote `seekIntent` received → `pendingSeek`
+- Remote `bufferingStarted` received → `paused` (wait for remote to be ready)
+
+**From `pendingSeek`:**
+- Local seek complete and videos ready → `pendingPlay`, send `seekComplete`
+- Remote `seekComplete` received → `playing` (if local also ready)
+
+### Remote Events
+The following remote events enable coordination between peers:
+
+* **`playIntent`**: Remote peer wants to start playing at specified playhead position
+* **`playReady`**: Remote peer is buffered and ready to start playing at specified position
+* **`playNotReady`**: Remote peer is not ready (still buffering) for playback at specified position
+* **`pauseIntent`**: Remote peer user explicitly paused playback
+* **`seekIntent`**: Remote peer user wants to seek to specified position
+* **`seekComplete`**: Remote peer has completed seeking and is ready at new position
+* **`bufferingStarted`**: Remote peer ran out of buffer during playback
+* **`bufferingComplete`**: Remote peer finished buffering and is ready to resume
+* **`audioChange`**: Remote peer changed audio track selection
+
+### Command Flow Examples
+
+**Play Intent Handshake:**
+1. Local user presses play → Local state: `pendingPlay`, send `playIntent` with target playhead
+2. Remote peer receives `playIntent`:
+   - If remote videos ready → send `playReady`, remote state: `playing`
+   - If remote videos not ready → send `playNotReady`, remote state: `buffering`
+3. Local peer receives `playReady` → Local state: `playing` (start playback)
+
+**Buffering During Playback:**
+1. During `playing`, local videos run out of buffer → Local state: `buffering`, send `bufferingStarted`
+2. Remote peer receives `bufferingStarted` → Remote state: `paused` (pause playback)
+3. Local buffering completes → Local state: `pendingPlay`, send `bufferingComplete`
+4. Remote peer receives `bufferingComplete` → Remote state: `playing` (resume playback)
+
+**Explicit Pause vs Seek:**
+- User pause → send `pauseIntent`, both peers go to `paused`
+- User seek → send `seekIntent` with target position, both peers go to `pendingSeek`, then coordinate resumption
+
+### UI State Mapping
+Synchronization states are reflected in the UI to provide clear feedback to users:
+
+**Play/Pause Button States:**
+- **`paused`**: Shows play symbol (▶️)
+- **`playing`**: Shows pause symbol (⏸️) 
+- **`buffering`**, **`pendingPlay`**, **`pendingSeek`**: Shows loading spinner
+
+**Remote Readiness Indicator:**
+- When local state is `pendingPlay` (local ready, waiting for remote): Show subtle indicator that remote peer is not ready
+- When both peers are ready: No special indicator needed
+- When local is not ready (`buffering`): No need to show remote status
+
+**Remote Event Feedback:**
+Incoming remote events trigger brief UI animations to indicate peer activity:
+- **Remote pause/play**: Play/pause button pulses/flashes
+- **Remote seek**: Playhead time display and scrubber pulse/flash
+- **Remote audio change**: Corresponding audio button pulses
+- **Remote buffering**: Loading indicator appears briefly
+
+These animations help users understand when their peer is taking actions vs. when they are taking actions themselves.
+
+### Unified Playhead Edge Cases
+The unified timeline may contain positions where only one video has content:
+
+**Single Video Active Playback:**
+- When unified playhead is positioned where only one video has frames, playback continues with just that video
+- The inactive video remains paused/hidden at its boundary position
+- Synchronization states and peer coordination continue normally
+
+**Automatic Second Video Join:**
+- During `playing` state, when playhead reaches the start time of the previously inactive video:
+  - Second video automatically starts playing in sync
+  - No additional peer coordination needed (both peers calculate this transition locally)
+  - Smooth transition maintains synchronized playback
+
+**State Sufficiency:**
+The current state model supports these edge cases:
+- `playing` state handles both single-video and dual-video playback
+- Local timeline calculations determine when videos should be active
+- Peer coordination remains consistent regardless of video activity
+- Buffering states apply independently to each video as needed
 
 **Handling Simultaneous Commands**:
 

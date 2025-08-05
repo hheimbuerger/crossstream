@@ -18,7 +18,7 @@ export class UI {
             audioLocalBtn: document.getElementById('left-audio-activate'),
             audioRemoteBtn: document.getElementById('right-audio-activate'),
         };
-        
+
         this.scrubber = null;
         this.isPlaying = false; // track current play state for event emission
         this.setupEventListeners();
@@ -29,13 +29,13 @@ export class UI {
         const errorDiv = document.createElement('div');
         errorDiv.className = 'error-message';
         errorDiv.textContent = message;
-        
+
         // Remove any existing error messages
         const existingError = document.querySelector('.error-message');
         if (existingError) existingError.remove();
-        
+
         document.body.appendChild(errorDiv);
-        
+
         // Auto-remove after 5 seconds
         setTimeout(() => {
             errorDiv.remove();
@@ -44,20 +44,20 @@ export class UI {
 
     showLoading(message) {
         this.hideLoading();
-        
+
         const loadingDiv = document.createElement('div');
         loadingDiv.className = 'loading-indicator';
-        
+
         const spinner = document.createElement('div');
         spinner.className = 'loading-spinner';
-        
+
         const text = document.createElement('div');
         text.textContent = message;
-        
+
         loadingDiv.appendChild(spinner);
         loadingDiv.appendChild(text);
         loadingDiv.id = 'loading-indicator';
-        
+
         document.body.appendChild(loadingDiv);
     }
 
@@ -70,8 +70,96 @@ export class UI {
 
     // --- UI Update Methods ---
     updatePlayPauseButton(isPlaying) {
+        const btn = this.elements.playPauseBtn;
         this.isPlaying = isPlaying;
-        this.elements.playPauseBtn.textContent = isPlaying ? '⏸' : '▶';
+        btn.textContent = isPlaying ? '⏸️' : '▶️';
+        btn.title = isPlaying ? 'Pause' : 'Play';
+        btn.classList.remove('loading');
+        console.log(`[DVP State] ${isPlaying ? '▶️ Playing' : '⏸️ Paused'}`);
+    }
+
+    updateSyncState(syncState) {
+        const btn = this.elements.playPauseBtn;
+        const prevState = this.syncState;
+        this.syncState = syncState.state;
+
+        // Only log state changes
+        if (prevState !== this.syncState) {
+            const stateTitles = {
+                'paused': '⏸️ Paused',
+                'playing': '▶️ Playing',
+                'buffering': '⏳ Buffering',
+                'pendingPlay': '⏳ Waiting for peer...',
+                'pendingSeek': '⏳ Seeking...'
+            };
+            console.log(`[DVP State] ${stateTitles[syncState.state] || syncState.state}${syncState.playhead ? ` @${syncState.playhead.toFixed(2)}s` : ''}`);
+        }
+
+        switch (syncState.state) {
+            case 'paused':
+                btn.textContent = '▶️';
+                btn.title = 'Play';
+                btn.classList.remove('loading');
+                this.hideRemoteReadinessIndicator();
+                break;
+
+            case 'playing':
+                btn.textContent = '⏸️';
+                btn.title = 'Pause';
+                btn.classList.remove('loading');
+                this.hideRemoteReadinessIndicator();
+                break;
+
+            case 'buffering':
+            case 'pendingPlay':
+            case 'pendingSeek':
+                btn.textContent = '⏳';
+                btn.title = this.getSyncStateTitle(syncState.state);
+                btn.classList.add('loading');
+
+                // Show remote readiness indicator for pendingPlay
+                if (syncState.state === 'pendingPlay') {
+                    this.showRemoteReadinessIndicator();
+                } else {
+                    this.hideRemoteReadinessIndicator();
+                }
+                break;
+        }
+
+        // Show buffering videos info if available
+        if (syncState.bufferingVideos) {
+            this.showBufferingInfo(syncState.bufferingVideos);
+        }
+    }
+
+    getSyncStateTitle(state) {
+        switch (state) {
+            case 'buffering': return 'Buffering...';
+            case 'pendingPlay': return 'Waiting for remote peer...';
+            case 'pendingSeek': return 'Seeking...';
+            default: return 'Loading...';
+        }
+    }
+
+    showRemoteReadinessIndicator() {
+        // Show subtle indicator that we're waiting for remote peer
+        const indicator = document.getElementById('remote-readiness-indicator');
+        if (indicator) {
+            indicator.style.display = 'block';
+            indicator.textContent = 'Waiting for peer...';
+        }
+    }
+
+    hideRemoteReadinessIndicator() {
+        const indicator = document.getElementById('remote-readiness-indicator');
+        if (indicator) {
+            indicator.style.display = 'none';
+        }
+    }
+
+    showBufferingInfo(bufferingVideos) {
+        // Show which videos are buffering (for debugging/info)
+        console.log(`Buffering: ${bufferingVideos.join(', ')} video(s)`);
     }
 
     updateTimeDisplay(playhead, duration) {
@@ -119,14 +207,14 @@ export class UI {
             localConfig,
             remoteConfig
         );
-        
+
         return this.scrubber;
     }
-    
+
     // --- Event Listeners ---
     setupEventListeners() {
         const { playPauseBtn, rewindBtn, forwardBtn, scrubber, audioLocalBtn, audioRemoteBtn, audioMuteBtn } = this.elements;
-        
+
         // Play / Pause toggle emits dedicated events
         playPauseBtn.addEventListener('click', () => {
             if (this.isPlaying) {
@@ -190,6 +278,12 @@ export class UI {
                 this.scrubber.updatePlayhead(state.playhead);
         });
 
+        // Handle synchronization state changes
+        bus.on('syncStateChanged', (syncState) => {
+            console.log('[SyncState]', syncState.state);
+            this.updateSyncState(syncState);
+        });
+
         // Handle time updates during playback
         bus.on('timeUpdate', ({playhead, duration}) => {
             this.updateTimeDisplay(playhead, duration);
@@ -201,7 +295,7 @@ export class UI {
         bus.on('remoteAudioChange', (command) => {
             if (command.track) {
                 // Map remote track to local audio source
-                const audioSource = command.track === 'local' ? 'remote' : 
+                const audioSource = command.track === 'local' ? 'remote' :
                                   command.track === 'remote' ? 'local' : 'none';
                 this.#updateAudioButtons(audioSource);
             }
@@ -213,7 +307,7 @@ export class UI {
         const { audioLocalBtn, audioRemoteBtn } = this.elements;
         const btns = [audioLocalBtn, audioRemoteBtn];
         btns.forEach(btn => btn.classList.remove('active'));
-        
+
         if (active === 'local') {
             audioLocalBtn.classList.add('active');
         } else if (active === 'remote') {
@@ -224,17 +318,17 @@ export class UI {
     // --- Cleanup ---
     cleanup() {
         this.hideLoading();
-        
+
         // Clean up scrubber
         if (this.scrubber) {
             this.scrubber.destroy();
             this.scrubber = null;
         }
-        
+
         // Clean up error messages
         const errorMessages = document.querySelectorAll('.error-message');
         errorMessages.forEach(el => el.remove());
-        
+
         // Clean up event listeners by cloning nodes
         const { playPauseBtn, rewindBtn, forwardBtn, scrubber } = this.elements;
         playPauseBtn.replaceWith(playPauseBtn.cloneNode(true));

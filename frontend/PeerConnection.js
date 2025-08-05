@@ -354,16 +354,24 @@ export class PeerConnection {
      * @private
      */
     _summarizeCommand = (command) => {
-        switch (command.type) {
-            case 'play':
-                return `play @${command.playhead}`;
-            case 'pauseSeek':
-                return `pauseSeek @${command.playhead}`;
-            case 'audioChange':
-                return `audioChange track:${command.track}`;
-            default:
-                return command.type;
+        const parts = [command.type];
+        
+        // Add playhead if present
+        if (command.playhead !== undefined) {
+            parts.push(`@${command.playhead.toFixed(2)}s`);
         }
+        
+        // Add track if present (for audioChange)
+        if (command.track) {
+            parts.push(`track:${command.track}`);
+        }
+        
+        // Add any buffering info
+        if (command.videos) {
+            parts.push(`videos:${JSON.stringify(command.videos)}`);
+        }
+        
+        return parts.join(' ');
     };
 
     /**
@@ -374,8 +382,32 @@ export class PeerConnection {
      */
     _log = (direction, detail) => {
         const msg = typeof detail === 'string' ? detail : this._summarizeCommand(detail);
-        const prefix = direction === 'WARN' ? '[SYNC WARN]' : `[SYNC ${direction}]`;
-        (direction === 'WARN' ? console.warn : console.log)(`${prefix} ${msg}`);
+        
+        // Use different symbols for different directions
+        let prefix;
+        switch (direction) {
+            case 'OUT':
+                prefix = '🡆 OUT';  // Right arrow for outgoing
+                break;
+            case 'IN':
+                prefix = '🡄 IN';   // Left arrow for incoming
+                break;
+            case 'WARN':
+                prefix = '⚠️ WARN';
+                break;
+            default:
+                prefix = `[${direction}]`;
+        }
+        
+        // Add timestamp
+        const logLine = `[${prefix}] ${msg}`;
+        
+        // Use appropriate console method
+        if (direction === 'WARN') {
+            console.warn(logLine);
+        } else {
+            console.log(logLine);
+        }
     };
 
     /**
@@ -412,7 +444,20 @@ export class PeerConnection {
         this.lastAppliedClock = { ...command.clock };
         this.lastAppliedSenderId = command.senderId;
 
-        const eventName = `remote${command.type.charAt(0).toUpperCase()}${command.type.slice(1)}`;
+        // Map command types to their corresponding event names
+        const eventMap = {
+            'playIntent': 'remotePlayIntent',
+            'playReady': 'remotePlayReady',
+            'playNotReady': 'remotePlayNotReady',
+            'pauseIntent': 'remotePauseIntent',
+            'seekIntent': 'remoteSeekIntent',
+            'seekComplete': 'remoteSeekComplete',
+            'bufferingStarted': 'remoteBufferingStarted',
+            'bufferingComplete': 'remoteBufferingComplete',
+            'audioChange': 'remoteAudioChange'
+        };
+        
+        const eventName = eventMap[command.type];
         bus.emit(eventName, command);
     }
 }
