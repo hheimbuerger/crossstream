@@ -1,0 +1,128 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "TUI (vid 3a)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "tui.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--host=localhost",
+                "--port=6001",
+                "--transcoder-port=6002",
+                "--media-dir=..\\test_videos\\3a"
+            ],
+            "justMyCode": false
+        },
+        {
+            "name": "host (localhost, vid 2h)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "backend.host",
+            "args": [
+                "--host=localhost",
+                "--port=6001",
+                "--transcoder-port=6002",
+                "--media-dir=..\\..\\CrossStream (archived)\\old_test_videos\\2h"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+        },
+        {
+            "name": "host (localhost, vid 2s)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "backend.host",
+            "args": [
+                "--host=localhost",
+                "--port=7001",
+                "--transcoder-port=7002",
+                "--media-dir=..\\..\\CrossStream (archived)\\old_test_videos\\2s"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+        },
+        {
+            "name": "host (localhost, vid 3a)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "backend.host",
+            "args": [
+                "--host=localhost",
+                "--port=6001",
+                "--transcoder-port=6002",
+                "--media-dir=..\\test_videos\\3a"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+        },
+        {
+            "name": "host (localhost, vid 3b)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "backend.host",
+            "args": [
+                "--host=localhost",
+                "--port=7001",
+                "--transcoder-port=7002",
+                "--media-dir=..\\test_videos\\3b"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+        },
+        {
+            "name": "host (localhost, vid 4a)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "backend.host",
+            "args": [
+                "--host=localhost",
+                "--port=6001",
+                "--transcoder-port=6002",
+                "--media-dir=..\\test_videos\\4a",
+                "--force-timestamp-from-filename"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+        },
+        {
+            "name": "host (localhost, vid 4b)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "backend.host",
+            "args": [
+                "--host=localhost",
+                "--port=7001",
+                "--transcoder-port=7002",
+                "--media-dir=..\\test_videos\\4b",
+                "--force-timestamp-from-filename"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+        },
+        {
+            "name": "host (h.s.m, live)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "backend.host",
+            "args": [
+                "--host=heimbuerger.synology.me",
+                "--port=6001",
+                "--transcoder-port=6002",
+                "--media-dir=D:\\Videos\\Capture (OBS)"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Run 4 a+b",
+            "configurations": [
+                "host (localhost, vid 4a)",
+                "host (localhost, vid 4b)"
+            ]
+        }
+    ]
+}

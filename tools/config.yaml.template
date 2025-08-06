@@ -76,7 +76,8 @@ vod:
   audio-profile:
     codec: copy
     #bitrate: 192 # kbps
-    #filtergraph:
+    filtergraph:
+      - "[ain]amix=inputs=1[aout]"       # use first audio track only
     #  - "[ain][0:a:1]amix=inputs=2[ajoined]"       # mix second audio track into the first
     #  - "[ajoined]asetrate=48000*1.5,aresample=48000[aout]" # Pitch the audio up by ~50 % (everyone's a famous mouse!)
 
