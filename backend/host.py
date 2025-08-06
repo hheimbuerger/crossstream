@@ -82,6 +82,7 @@ def parse_arguments():
     parser.add_argument('--transcoder-port', type=int, default=DEFAULT_TRANSCODER_PORT,
                         help=f'Port for the transcoder (default: {DEFAULT_TRANSCODER_PORT})')
     parser.add_argument('--media-dir', type=pathlib.Path, required=True, help='Directory containing media files')
+    parser.add_argument('--file-name', type=str, help='Partial file name to match in media directory (if not specified, uses latest file)')
     parser.add_argument('--force-timestamp-from-filename', action='store_true',
                         help='Extract timestamp from filename using pattern YYYY*MM*DD*HH*mm*SS instead of using file creation time')
     args = parser.parse_args()
@@ -115,6 +116,7 @@ def main() -> int:
         cache_dir=cache_dir,
         tools_dir=tools_dir,
         force_timestamp=args.force_timestamp_from_filename,
+        file_name=args.file_name,
     )
     transcoder_manager = TranscoderManager(
         tools_dir=tools_dir,

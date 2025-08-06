@@ -52,7 +52,8 @@ class TranscoderManager:
             '--config', str(config_file.resolve()),
         ]
         
-        print(f"Starting transcoder with command: {' '.join(transcode_cmd)}")
+        #print(f"Starting transcoder with command: {' '.join(transcode_cmd)}")
+        print(f"Starting transcoder: {self.executable_name}")
         
         # Set up environment with UTF-8 encoding
         env = os.environ.copy()
