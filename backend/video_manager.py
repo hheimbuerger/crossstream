@@ -21,7 +21,7 @@ class VideoManager:
 
     def __init__(self, media_dir: Path, cache_dir: Path, tools_dir: Path,
                  thumbnail_height: int = 90, seconds_per_thumbnail: float = 5.0,
-                 force_timestamp: str = None):
+                 force_timestamp: str = None, file_name: str = None):
         """Initialize the video manager.
 
         Args:
@@ -31,6 +31,7 @@ class VideoManager:
             thumbnail_height: Height of thumbnails in pixels
             seconds_per_thumbnail: Time interval between thumbnails
             force_timestamp: If set, extract timestamp from filename using pattern YYYY*MM*DD*HH*mm*SS
+            file_name: If set, partial file name to match in media directory
         """
         # Configuration
         self.media_dir = media_dir
@@ -40,17 +41,21 @@ class VideoManager:
         self.thumbnail_height = thumbnail_height
         self.seconds_per_thumbnail = seconds_per_thumbnail
         self.force_timestamp = force_timestamp
+        self.file_name = file_name
 
     def prepare_video(self):
-        """Find the latest video and prepare it for playback.
+        """Find the video and prepare it for playback.
         
         Performs heavy operations:
-        - Finds/validates video file
+        - Finds/validates video file (by partial name match or latest)
         - Extracts metadata (duration, fps, etc.)
         - Generates thumbnail sprite if not cached
         """
-        # Identify latest video by creation time
-        self.video_path, self.timestamp = self.find_latest_video()
+        # Select video based on file name or latest creation time
+        if self.file_name:
+            self.video_path, self.timestamp = self.find_video_by_partial_name(self.file_name)
+        else:
+            self.video_path, self.timestamp = self.find_latest_video()
 
         # Extract metadata using integrated FFprobe functionality
         self._extract_metadata()
@@ -73,6 +78,49 @@ class VideoManager:
         timestamp = self._get_file_creation_time(video_path)
         print(f'Most recently created video: {video_path.name} (created: {timestamp.isoformat()})')
         return video_path, timestamp
+
+    def find_video_by_partial_name(self, partial_name: str) -> tuple[Path, datetime.datetime]:
+        """Find video file by partial name match.
+        
+        Args:
+            partial_name: Partial file name to match
+            
+        Returns:
+            tuple: (video_path, timestamp) for the matched video
+            
+        Raises:
+            SystemExit: If zero or multiple files match the pattern
+        """
+        video_extensions = {'.mp4', '.mov', '.avi', '.mkv', '.wmv'}
+        video_files = [
+            f for f in self.media_dir.iterdir()
+            if f.is_file() and f.suffix.lower() in video_extensions
+        ]
+        
+        # Find files that contain the partial name (case-insensitive)
+        matching_files = [
+            f for f in video_files
+            if partial_name.lower() in f.name.lower()
+        ]
+        
+        if len(matching_files) == 0:
+            available_files = "\n".join([f"  - {f.name}" for f in video_files])
+            raise FileNotFoundError(
+                f"No files matched the pattern '{partial_name}'.\n"
+                f"Available video files:\n{available_files}"
+            )
+        elif len(matching_files) > 1:
+            matching_file_list = "\n".join([f"  - {f.name}" for f in matching_files])
+            raise ValueError(
+                f"Multiple files matched the pattern '{partial_name}'.\n"
+                f"Matching files:\n{matching_file_list}"
+            )
+        else:
+            # Exactly one match found
+            video_path = matching_files[0]
+            timestamp = self._get_file_creation_time(video_path)
+            print(f'Selected video by partial name match: {video_path.name} (created: {timestamp.isoformat()})')
+            return video_path, timestamp
 
     def _extract_metadata(self) -> None:
         """Extract comprehensive metadata from the video."""
