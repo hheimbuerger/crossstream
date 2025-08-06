@@ -47,6 +47,58 @@ A data class representing the configuration for a single video stream. This conf
 - The scrubber uses these timestamps to calculate video offsets and display the correct thumbnail from each video's timeline when hovering over the unified timeline.
 - Thumbnail dimensions can vary between local and remote videos, allowing for different quality/size configurations per stream.
 
+## UI Architecture Principles
+
+### Single Source of Truth for UI State
+
+The UI follows a **strict separation of concerns** where different types of state are handled by different components:
+
+**SynchronizationEngine Controls UI State:**
+- Play/pause button appearance (▶️/⏸️/⏳)
+- Hourglass modes during coordination (`pendingSeek`, `pendingPlay`, `buffering`)
+- "Waiting for peer" indicators
+- All user-facing control states
+
+**DualVideoPlayer Provides Data Only:**
+- Current playhead position
+- Video duration
+- Audio source selection
+- Scrubber position updates
+
+### Design Rationale
+
+The user's mental model is about **cross-peer coordination**, not local video state:
+- "Am I playing?" → Are both peers synchronized and playing?
+- "Am I seeking?" → Are we coordinating a seek between peers?
+- "Can I press play?" → Are both peers ready for synchronized playback?
+
+The DualVideoPlayer state is an **implementation detail** - the user doesn't care if the local `<video>` element is playing if the remote peer isn't ready.
+
+### Event Flow Separation
+
+**Control State (SynchronizationEngine → UI):**
+```javascript
+bus.on('syncStateChanged', (syncState) => {
+    this.updateSyncState(syncState); // Single source of truth for controls
+});
+```
+
+**Data Updates (DualVideoPlayer → UI):**
+```javascript
+bus.on('stateChange', (state) => {
+    this.updateTimeDisplay(state.playhead, state.duration); // Data only
+    this.scrubber.updatePlayhead(state.playhead); // Data only
+    // NO play button updates - that's handled by sync state
+});
+```
+
+### Benefits
+
+1. **Predictable UI** → Button always reflects what the user can do
+2. **No State Conflicts** → Single source of truth for control state
+3. **Cleaner Separation** → DVP handles video, SyncEngine handles coordination, UI reflects coordination
+4. **Easier Debugging** → UI state directly maps to sync state
+
 ## Event Handling
 
 ### Overview
@@ -78,8 +130,6 @@ These commands are sent via the WebRTC data channel and trigger corresponding ev
 | `pauseIntent` | SynchronizationEngine | `{ type: 'pauseIntent', playhead: number }` | Request to pause playback |
 | `seekIntent` | SynchronizationEngine | `{ type: 'seekIntent', playhead: number }` | Request to seek to specific position |
 | `seekComplete` | SynchronizationEngine | `{ type: 'seekComplete', playhead: number }` | Sent after completing a seek operation, indicates the final playhead position |
-| `bufferingStarted` | SynchronizationEngine | `{ type: 'bufferingStarted' }` | Notification that buffering started |
-| `bufferingComplete` | SynchronizationEngine | `{ type: 'bufferingComplete' }` | Notification that buffering completed |
 | `audioChange` | SynchronizationEngine | `{ type: 'audioChange', track: 'local'\|'remote'\|'none' }` | Audio source changed |
 
 #### Command Flow Examples
@@ -89,17 +139,19 @@ These commands are sent via the WebRTC data channel and trigger corresponding ev
    - Peer B: `playReady @10.5s` → Peer A
    - Both peers start playback
 
-2. **Seek Operation**
+2. **Seek Operation (Two-Phase Completion)**
    - Peer A: `seekIntent @30.0s` → Peer B
-   - Peer B seeks to 30.0s
-   - Peer B: `seekComplete @30.0s` → Peer A
-   - Both peers are now paused at 30.0s
+   - Both peers enter `pendingSeek` state and begin seeking
+   - Peer A completes seek: `seekComplete @30.0s` → Peer B (marks local completion)
+   - Peer B completes seek: `seekComplete @30.0s` → Peer A (marks local completion)
+   - Both peers detect completion from both sides and transition to `paused`
+   - **Critical**: Each peer must send its own `seekComplete` AND receive the remote `seekComplete` before transitioning out of `pendingSeek`
 
-3. **Buffering**
-   - Peer A: `bufferingStarted` → Peer B
-   - Peer B pauses playback
-   - Peer A: `bufferingComplete` → Peer B
-   - Playback resumes when both peers are ready
+3. **Buffer Depletion During Playback**
+   - Peer A runs out of buffer while playing and sends `playNotReady`
+   - Peer B receives `playNotReady`, pauses playback and waits
+   - When Peer A recovers buffer it sends `playReady`
+   - Both peers resume playback
 
 #### Internal Bus Events
 These events are used for communication within the same browser context.
@@ -452,7 +504,30 @@ Each peer maintains its own local state. States describe only the local situatio
 * **`buffering`**: Local videos are loading/buffering content and are not ready for playback (readyState < 3).
 * **`pendingPlay`**: Local user wants to play, local videos are buffered and ready, but waiting for remote peer confirmation before starting playback.
 * **`playing`**: Local videos are actively playing. Playback was started after both local readiness and remote confirmation.
-* **`pendingSeek`**: Local user initiated a seek, local videos are seeking to target position, waiting for remote peer to confirm seek completion.
+* **`pendingSeek`**: Local user initiated a seek, local videos are seeking to target position, waiting for both local and remote seek completion.
+
+### Seek Completion Tracking
+
+The system uses **two-phase completion tracking** to ensure reliable seek coordination:
+
+**State Variables:**
+- `localSeekComplete`: Boolean flag tracking whether this peer has sent its `seekComplete`
+- `remoteSeekComplete`: Boolean flag tracking whether this peer has received remote `seekComplete`
+
+**Completion Logic:**
+```javascript
+checkSeekCompletion() {
+    if (this.localSeekComplete && this.remoteSeekComplete) {
+        // Both peers have completed - transition to paused
+        this.syncState = 'paused';
+        this.localSeekComplete = false;
+        this.remoteSeekComplete = false;
+    }
+}
+```
+
+**Why This Matters:**
+Previous implementation had a critical bug where receiving a remote `seekComplete` would immediately transition to `paused`, even if the local peer hadn't sent its own completion. This caused deadlocks where one peer would get stuck in `pendingSeek` forever because the other peer never sent its completion message.
 
 ### State Transitions
 State transitions are triggered by local events (user actions, video readiness changes) and remote events:

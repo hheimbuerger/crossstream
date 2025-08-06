@@ -17,6 +17,11 @@ export class DualVideoPlayer {
      */
     #BUFFER_LOOKAHEAD_SECONDS = 2;
 
+    /**
+     * Maximum allowed playhead offset between local video streams before warning is logged and re-seeking is triggered
+     */
+    #VIDEO_OUT_OF_SYNC_THRESHOLD_SECONDS = 0.5;
+
     // State
     state = 'paused'; // 'paused' | 'ready' | 'playing'
     audioSource = 'none'; // 'none' | 'local' | 'remote'
@@ -27,6 +32,7 @@ export class DualVideoPlayer {
 
     // Buffer monitoring
     #bufferMonitorInterval = null;
+    #readinessMonitorInterval = null; // Monitor readiness when paused
     #lastBufferCheck = { local: true, remote: true }; // Track buffer state changes
 
     // Video elements
@@ -268,18 +274,9 @@ export class DualVideoPlayer {
         const remoteTime = this.remoteVideo.currentTime + this.timeOffset;
         const diff = Math.abs(localTime - remoteTime);
 
-        if (diff > 0.1) { // 100ms threshold
+        if (diff > this.#VIDEO_OUT_OF_SYNC_THRESHOLD_SECONDS) { // 100ms threshold
             console.warn(`Videos out of sync by ${diff.toFixed(3)}s`);
         }
-
-        // Log timeline information for debugging
-        console.debug('Timeline:', {
-            start: new Date(this.#timelineStart).toISOString(),
-            end: new Date(this.#timelineEnd).toISOString(),
-            duration: this.#totalDuration,
-            localStart: new Date(this.#localStartTime).toISOString(),
-            remoteStart: new Date(this.#remoteStartTime).toISOString()
-        });
     }
 
     /**
@@ -290,22 +287,37 @@ export class DualVideoPlayer {
      */
     #isVideoBuffered(video) {
         // Check if video has sufficient readyState
-        if (video.readyState < 3) return false;
+        if (video.readyState < 3) {
+            // console.log(`[DVP] ${video === this.localVideo ? 'Local' : 'Remote'} video readyState insufficient: ${video.readyState}`);
+            return false;
+        }
 
         // Check buffered ranges for current position
         const currentTime = video.currentTime;
         const buffered = video.buffered;
+        const videoName = video === this.localVideo ? 'Local' : 'Remote';
+
+        // Small tolerance for floating-point precision issues (e.g., currentTime=0, buffer starts at 0.01)
+        const BUFFER_START_TOLERANCE = 0.05; // 50ms tolerance
+
+        // console.log(`[DVP] ${videoName} buffer check: currentTime=${currentTime.toFixed(3)}, buffered.length=${buffered.length}`);
 
         for (let i = 0; i < buffered.length; i++) {
             const start = buffered.start(i);
             const end = buffered.end(i);
+            const withinRange = currentTime >= (start - BUFFER_START_TOLERANCE);
+            const hasLookahead = currentTime + this.#BUFFER_LOOKAHEAD_SECONDS <= end;
+            
+            // console.log(`[DVP] ${videoName} range ${i}: [${start.toFixed(3)}-${end.toFixed(3)}], withinRange=${withinRange}, hasLookahead=${hasLookahead}`);
 
-            // If current position is within a buffered range with some lookahead
-            if (currentTime >= start && currentTime + this.#BUFFER_LOOKAHEAD_SECONDS <= end) {
+            // If current position is within a buffered range (with tolerance) and has sufficient lookahead
+            if (withinRange && hasLookahead) {
+                // console.log(`[DVP] ${videoName} video is buffered`);
                 return true;
             }
         }
 
+        // console.log(`[DVP] ${videoName} video is NOT buffered`);
         return false;
     }
 
@@ -329,6 +341,15 @@ export class DualVideoPlayer {
             if (remoteBufferingStarted) bufferingVideos.push('remote');
 
             console.log(`[DVP] Video buffer depleted during playback: ${bufferingVideos.join(', ')}`);
+            
+            // Pause videos to prevent drift while buffering
+            this.localVideo.pause();
+            this.remoteVideo.pause();
+            this.state = 'paused'; // Go back to paused so updateReadyState can detect buffer restoration
+            
+            // Start periodic readiness monitoring since video events may not fire when buffer fills
+            this.#startReadinessMonitoring();
+            
             bus.emit('bufferingStarted', { videos: bufferingVideos });
         }
 
@@ -338,6 +359,13 @@ export class DualVideoPlayer {
 
         if ((localBufferingComplete || remoteBufferingComplete) && localBuffered && remoteBuffered) {
             console.log('[DVP] Video buffer restored, ready to resume playback');
+            
+            // Only auto-resume if we were previously playing (state should be 'ready' after buffer pause)
+            if (this.state === 'ready') {
+                // Don't auto-resume here - let SynchronizationEngine coordinate with peer
+                // Just emit the event so sync engine can handle resume coordination
+            }
+            
             bus.emit('bufferingComplete');
         }
 
@@ -346,34 +374,119 @@ export class DualVideoPlayer {
         this.#lastBufferCheck.remote = remoteBuffered;
     }
 
+    /**
+     * Unified readiness evaluation - determines correct state based on current conditions
+     * @private
+     */
+    #evaluateReadinessState() {
+        const localBuffered = this.#isVideoBuffered(this.localVideo);
+        const remoteBuffered = this.#isVideoBuffered(this.remoteVideo);
+        const localReady = this.localVideo.readyState >= 3;
+        const remoteReady = this.remoteVideo.readyState >= 3;
+        const allReady = localReady && remoteReady && localBuffered && remoteBuffered;
+        
+        // Debug logging
+        // console.log('[DVP] Readiness evaluation:', {
+        //     currentState: this.state,
+        //     localReadyState: this.localVideo.readyState,
+        //     remoteReadyState: this.remoteVideo.readyState,
+        //     localBuffered,
+        //     remoteBuffered,
+        //     allReady,
+        //     localCurrentTime: this.localVideo.currentTime.toFixed(3),
+        //     remoteCurrentTime: this.remoteVideo.currentTime.toFixed(3)
+        // });
+        
+        // Update buffer state tracking
+        this.#lastBufferCheck.local = localBuffered;
+        this.#lastBufferCheck.remote = remoteBuffered;
+        
+        // Determine correct state based on conditions
+        if (this.state === 'playing' && !allReady) {
+            // EMERGENCY: Playing but not ready - immediate stop
+            // console.log('[DVP] EMERGENCY: Playing with unready videos, stopping playback');
+            this.#stopPlayback();
+            this.state = 'paused';
+            this.#emitState();
+            this.#startReadinessMonitoring();
+        } else if (this.state === 'ready' && !allReady) {
+            // Ready but conditions lost - downgrade to paused
+            // console.log('[DVP] Readiness lost, downgrading to paused');
+            this.state = 'paused';
+            this.#emitState();
+            this.#startReadinessMonitoring();
+        } else if (this.state === 'paused' && allReady) {
+            // Paused but all ready - upgrade to ready
+            // console.log('[DVP] All conditions met, upgrading to ready');
+            this.state = 'ready';
+            this.#emitState();
+            bus.emit('bufferingComplete');
+            this.#stopReadinessMonitoring();
+        }
+    }
+    
+    /**
+     * Stop playback and clean up monitoring intervals
+     * @private
+     */
+    #stopPlayback() {
+        this.localVideo.pause();
+        this.remoteVideo.pause();
+        
+        if (this.#syncInterval) {
+            clearInterval(this.#syncInterval);
+            this.#syncInterval = null;
+        }
+        if (this.#bufferMonitorInterval) {
+            clearInterval(this.#bufferMonitorInterval);
+            this.#bufferMonitorInterval = null;
+        }
+        if (this.#timeUpdateRaf) {
+            cancelAnimationFrame(this.#timeUpdateRaf);
+            this.#timeUpdateRaf = null;
+        }
+    }
+    
+    /**
+     * Start periodic monitoring of readiness
+     * @private
+     */
+    #startReadinessMonitoring() {
+        // Clear any existing monitoring
+        this.#stopReadinessMonitoring();
+        
+        // Check readiness every 500ms
+        this.#readinessMonitorInterval = setInterval(() => {
+            if (this.state === 'paused') {
+                this.#evaluateReadinessState();
+            } else {
+                // Stop monitoring if no longer paused
+                this.#stopReadinessMonitoring();
+            }
+        }, 500);
+    }
+
+    /**
+     * Stop periodic readiness monitoring
+     * @private
+     */
+    #stopReadinessMonitoring() {
+        if (this.#readinessMonitorInterval) {
+            clearInterval(this.#readinessMonitorInterval);
+            this.#readinessMonitorInterval = null;
+        }
+    }
+
     #setupEventListeners() {
         const updateReadyState = () => {
-            // console.log('updateReadyState', this.state, this.localVideo.readyState, this.remoteVideo.readyState);
-            if (this.state === 'paused' &&
-                this.localVideo.readyState >= 3 &&
-                this.remoteVideo.readyState >= 3) {
-                this.state = 'ready';
-                this.#emitState();
-            }
-        };
-
-        // Enhanced readiness detection - monitor buffer state changes
-        const checkBufferState = () => {
-            const localBuffered = this.#isVideoBuffered(this.localVideo);
-            const remoteBuffered = this.#isVideoBuffered(this.remoteVideo);
-
-            // Update buffer state tracking
-            this.#lastBufferCheck.local = localBuffered;
-            this.#lastBufferCheck.remote = remoteBuffered;
-
-            // Update overall readiness
-            updateReadyState();
+            // Use unified readiness evaluation
+            this.#evaluateReadinessState();
         };
 
         // Add event listeners for video ready state and buffer changes
         const events = ['canplay', 'seeked', 'waiting', 'canplaythrough', 'stalled'];
         this._videoEventHandlers = events.map(event => {
-            const handler = checkBufferState.bind(this);
+            const handler = updateReadyState.bind(this);
             this.localVideo.addEventListener(event, handler);
             this.remoteVideo.addEventListener(event, handler);
             return { event, handler };
@@ -565,6 +678,8 @@ export class DualVideoPlayer {
             cancelAnimationFrame(this.#timeUpdateRaf);
             this.#timeUpdateRaf = null;
         }
+        // Clean up readiness monitoring
+        this.#stopReadinessMonitoring();
         this.#lastEmittedSecond = null;
     }
 
@@ -578,5 +693,18 @@ export class DualVideoPlayer {
             audioSource: this.audioSource,
             timeOffset: this.timeOffset
         };
+    }
+
+    /**
+     * Check if both videos are truly ready and buffered for playback
+     * @returns {boolean} True if both videos are ready and buffered
+     */
+    isActuallyReady() {
+        const localReady = this.localVideo.readyState >= 3;
+        const remoteReady = this.remoteVideo.readyState >= 3;
+        const localBuffered = this.#isVideoBuffered(this.localVideo);
+        const remoteBuffered = this.#isVideoBuffered(this.remoteVideo);
+        
+        return localReady && remoteReady && localBuffered && remoteBuffered;
     }
 }

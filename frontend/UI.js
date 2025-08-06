@@ -21,6 +21,7 @@ export class UI {
 
         this.scrubber = null;
         this.isPlaying = false; // track current play state for event emission
+        this.currentSyncState = 'paused'; // track sync state for hourglass mode detection
         this.setupEventListeners();
     }
 
@@ -69,22 +70,25 @@ export class UI {
     }
 
     // --- UI Update Methods ---
+    // NOTE: This method is now only used by sync state, not DVP state
+    // The play button reflects cross-peer sync state, not local DVP state
     updatePlayPauseButton(isPlaying) {
         const btn = this.elements.playPauseBtn;
         this.isPlaying = isPlaying;
         btn.textContent = isPlaying ? '⏸️' : '▶️';
         btn.title = isPlaying ? 'Pause' : 'Play';
         btn.classList.remove('loading');
-        console.log(`[DVP State] ${isPlaying ? '▶️ Playing' : '⏸️ Paused'}`);
     }
 
     updateSyncState(syncState) {
         const btn = this.elements.playPauseBtn;
-        const prevState = this.syncState;
-        this.syncState = syncState.state;
+        if (!btn) return;
 
-        // Only log state changes
-        if (prevState !== this.syncState) {
+        // Track current sync state for hourglass mode detection
+        this.currentSyncState = syncState.state;
+
+        // Debug logging
+        if (syncState.state) {
             const stateTitles = {
                 'paused': '⏸️ Paused',
                 'playing': '▶️ Playing',
@@ -92,7 +96,7 @@ export class UI {
                 'pendingPlay': '⏳ Waiting for peer...',
                 'pendingSeek': '⏳ Seeking...'
             };
-            console.log(`[DVP State] ${stateTitles[syncState.state] || syncState.state}${syncState.playhead ? ` @${syncState.playhead.toFixed(2)}s` : ''}`);
+            // console.log(`[DVP State] ${stateTitles[syncState.state] || syncState.state}${syncState.playhead ? ` @${syncState.playhead.toFixed(2)}s` : ''}`);
         }
 
         switch (syncState.state) {
@@ -100,6 +104,7 @@ export class UI {
                 btn.textContent = '▶️';
                 btn.title = 'Play';
                 btn.classList.remove('loading');
+                this.isPlaying = false; // Fix: sync internal state
                 this.hideRemoteReadinessIndicator();
                 break;
 
@@ -107,6 +112,7 @@ export class UI {
                 btn.textContent = '⏸️';
                 btn.title = 'Pause';
                 btn.classList.remove('loading');
+                this.isPlaying = true; // Fix: sync internal state
                 this.hideRemoteReadinessIndicator();
                 break;
 
@@ -159,7 +165,7 @@ export class UI {
 
     showBufferingInfo(bufferingVideos) {
         // Show which videos are buffering (for debugging/info)
-        console.log(`Buffering: ${bufferingVideos.join(', ')} video(s)`);
+        // console.log(`[DVP] Buffering: ${bufferingVideos.join(', ')} video(s)`);
     }
 
     updateTimeDisplay(playhead, duration) {
@@ -217,7 +223,13 @@ export class UI {
 
         // Play / Pause toggle emits dedicated events
         playPauseBtn.addEventListener('click', () => {
-            if (this.isPlaying) {
+            // If in hourglass mode (buffering/waiting states), force pause to abort the operation
+            const isHourglassMode = ['buffering', 'pendingPlay', 'pendingSeek'].includes(this.currentSyncState);
+            
+            if (isHourglassMode) {
+                console.log(`[UI] Hourglass mode detected (${this.currentSyncState}), forcing pause`);
+                bus.emit('localPause');
+            } else if (this.isPlaying) {
                 bus.emit('localPause');
             } else {
                 bus.emit('localPlay');
@@ -268,11 +280,11 @@ export class UI {
             this.pulse(elementId);
         });
 
-        // Reflect state changes coming from synchronizer
+        // Reflect state changes coming from DVP (data only, not control state)
         bus.on('stateChange', (state) => {
-            console.log('[State]', state.state);
+            // console.log('[DVP]', state.state);
             this.#updateAudioButtons(state.audioSource);
-            this.updatePlayPauseButton(state.state === 'playing');
+            // NOTE: Play button state is controlled by syncStateChanged, not DVP state
             this.updateTimeDisplay(state.playhead, state.duration);
             if (this.scrubber)   // this actually requires a check because it might be emitted as part of the initial seek, in parallel to scrubber initialization
                 this.scrubber.updatePlayhead(state.playhead);

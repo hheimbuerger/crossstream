@@ -452,8 +452,6 @@ export class PeerConnection {
             'pauseIntent': 'remotePauseIntent',
             'seekIntent': 'remoteSeekIntent',
             'seekComplete': 'remoteSeekComplete',
-            'bufferingStarted': 'remoteBufferingStarted',
-            'bufferingComplete': 'remoteBufferingComplete',
             'audioChange': 'remoteAudioChange'
         };
         
