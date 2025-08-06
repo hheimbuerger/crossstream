@@ -27,6 +27,7 @@ export class SynchronizationEngine {
         this.pendingPlayhead = null; // Target playhead for pending operations
         this.lastSeekComplete = null; // Track the last seek complete we've processed
         this.stateBeforeBuffering = null; // Remember state before buffering to enable resumption
+        this.pendingRemotePlayIntent = null; // Track pending remote playIntent when we're not ready
         this.localSeekComplete = false; // Track if we've sent our seekComplete
         this.remoteSeekComplete = false; // Track if we've received remote seekComplete
 
@@ -238,8 +239,9 @@ export class SynchronizationEngine {
             dvp.play();
             bus.emit('syncStateChanged', { state: this.syncState });
         } else {
-            // Not ready, send not ready response
+            // Not ready, send not ready response and remember the pending intent
             this.getPeerConnection()?.sendCommand({ type: 'playNotReady', playhead: command.playhead });
+            this.pendingRemotePlayIntent = command; // Remember this for when buffering completes
             this.syncState = 'buffering';
             bus.emit('syncStateChanged', { state: this.syncState });
         }
@@ -439,8 +441,27 @@ export class SynchronizationEngine {
         if (this.syncState === 'buffering') {
             console.log('[Sync] Local buffering complete');
             
+            // Check if there's a pending remote play intent we need to respond to
+            if (this.pendingRemotePlayIntent) {
+                console.log('[Sync] Responding to pending remote play intent with playReady');
+                const dvp = this.getDualVideoPlayer();
+                if (dvp) {
+                    // Send playReady to the remote peer
+                    this.getPeerConnection()?.sendCommand({ 
+                        type: 'playReady', 
+                        playhead: this.pendingRemotePlayIntent.playhead 
+                    });
+                    
+                    // Start playing
+                    this.syncState = 'playing';
+                    dvp.play();
+                }
+                
+                // Clear the pending remote play intent
+                this.pendingRemotePlayIntent = null;
+            }
             // If we were playing before buffering, attempt to resume
-            if (this.stateBeforeBuffering === 'playing') {
+            else if (this.stateBeforeBuffering === 'playing') {
                 console.log('[Sync] Attempting to resume playback after buffering');
                 this.syncState = 'pendingPlay';
                 
