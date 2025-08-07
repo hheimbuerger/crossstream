@@ -1,17 +1,14 @@
 /**
- * High-level orchestration of playback state between local video players, local UI and remote peers.
- *
- * Listens for local UI events and forwards them to the DualVideoPlayer and remote peers.
- * Handles remote commands by updating local playback state and resolving conflicts
- * using vector clock comparison when concurrent commands are received.
+ * Intent-driven SynchronizationEngine - Refactored for simplicity and maintainability
+ * 
+ * Core principle: All coordination is driven by a single "current intent" that represents
+ * what operation is currently in progress. All state transitions and recovery logic
+ * derive from completing or abandoning the current intent.
  */
 
 import bus from './EventBus.js';
 
 export class SynchronizationEngine {
-    /**
-     * Maximum allowed time difference between local and remote playheads before warning is logged and re-seeking is triggered
-     */
     #PEERS_OUT_OF_SYNC_THRESHOLD_SECONDS = 0.5;
 
     /**
@@ -22,169 +19,242 @@ export class SynchronizationEngine {
         this.getDualVideoPlayer = getDualVideoPlayer;
         this.getPeerConnection = getPeerConnection;
 
-        // Local synchronization state
-        this.syncState = 'paused'; // 'paused' | 'buffering' | 'pendingPlay' | 'playing' | 'pendingSeek'
-        this.pendingPlayhead = null; // Target playhead for pending operations
-        this.lastSeekComplete = null; // Track the last seek complete we've processed
-        this.stateBeforeBuffering = null; // Remember state before buffering to enable resumption
-        this.pendingRemotePlayIntent = null; // Track pending remote playIntent when we're not ready
-        this.localSeekComplete = false; // Track if we've sent our seekComplete
-        this.remoteSeekComplete = false; // Track if we've received remote seekComplete
+        // SINGLE SOURCE OF TRUTH: Current Intent
+        this.currentIntent = {
+            type: null,           // 'play' | 'pause' | 'seek' | 'audio' | null
+            initiator: null,      // 'local' | 'remote' | null
+            playhead: null,       // target playhead for play/seek operations
+            track: null,          // audio track for audio operations
+            timestamp: 0,         // when this intent was created
+            status: 'idle'        // 'idle' | 'coordinating' | 'waiting' | 'buffering' | 'complete'
+        };
 
-        // Register LOCAL commands
+        // Derived state (computed from intent)
+        this.syncState = 'paused'; // UI display state
+
+        this.setupEventListeners();
+    }
+
+    setupEventListeners() {
+        // LOCAL commands
         bus.on('localPlay', this.handleLocalPlay);
         bus.on('localPause', this.handleLocalPause);
         bus.on('localSeek', this.handleLocalSeek);
         bus.on('localSeekRelative', this.handleLocalSeekRelative);
         bus.on('localAudioChange', this.handleLocalAudioChange);
 
-        // Register REMOTE commands - new synchronization events
+        // REMOTE commands
         bus.on('remotePlayIntent', this.handleRemotePlayIntent);
         bus.on('remotePlayReady', this.handleRemotePlayReady);
         bus.on('remotePlayNotReady', this.handleRemotePlayNotReady);
         bus.on('remotePauseIntent', this.handleRemotePauseIntent);
         bus.on('remoteSeekIntent', this.handleRemoteSeekIntent);
         bus.on('remoteSeekComplete', this.handleRemoteSeekComplete);
-
-        bus.on('remotePlayReady', this.handleRemotePlayReady);
         bus.on('remoteAudioChange', this.handleRemoteAudioChange);
 
-        // Register buffer monitoring events from DualVideoPlayer
+        // BUFFER monitoring
         bus.on('bufferingStarted', this.handleBufferingStarted);
         bus.on('bufferingComplete', this.handleBufferingComplete);
         bus.on('stateChange', this.handleDVPStateChange);
 
-        // Handle player initialization
+        // INITIALIZATION
         bus.on('playersInitialized', this.handlePlayersInitialized);
+    }
+
+    // ============================================================================
+    // INTENT MANAGEMENT - Core logic for managing the current intent
+    // ============================================================================
+
+    /**
+     * Start a new intent, replacing any existing one
+     */
+    startIntent(type, initiator, { playhead = null, track = null } = {}) {
+        this.currentIntent = {
+            type,
+            initiator,
+            playhead,
+            track,
+            timestamp: Date.now(),
+            status: 'coordinating'
+        };
+        
+        console.log(`[Intent] Started: ${type} by ${initiator}`, this.currentIntent);
+        this.updateSyncState();
+    }
+
+    /**
+     * Update the status of the current intent
+     */
+    updateIntentStatus(newStatus) {
+        if (this.currentIntent.type) {
+            this.currentIntent.status = newStatus;
+            console.log(`[Intent] Status: ${this.currentIntent.type} -> ${newStatus}`);
+            this.updateSyncState();
+        }
+    }
+
+    /**
+     * Complete the current intent and return to idle
+     */
+    completeIntent() {
+        if (this.currentIntent.type) {
+            console.log(`[Intent] Completed: ${this.currentIntent.type}`);
+            this.currentIntent = {
+                type: null,
+                initiator: null,
+                playhead: null,
+                track: null,
+                timestamp: 0,
+                status: 'idle'
+            };
+            this.updateSyncState();
+        }
+    }
+
+    /**
+     * Check if a remote intent should override the current one (conflict resolution)
+     */
+    shouldAcceptRemoteIntent(remoteTimestamp) {
+        // Accept if no current intent or remote intent is newer
+        return !this.currentIntent.type || remoteTimestamp > this.currentIntent.timestamp;
+    }
+
+    /**
+     * Update the UI sync state based on current intent
+     */
+    updateSyncState() {
+        let newSyncState;
+        
+        switch (this.currentIntent.status) {
+            case 'idle':
+                newSyncState = this.currentIntent.type === 'play' ? 'playing' : 'paused';
+                break;
+            case 'coordinating':
+                if (this.currentIntent.type === 'play') {
+                    newSyncState = 'pendingPlay';
+                } else if (this.currentIntent.type === 'seek') {
+                    newSyncState = 'pendingSeek';
+                } else {
+                    newSyncState = 'paused';
+                }
+                break;
+            case 'waiting':
+                newSyncState = this.currentIntent.type === 'play' ? 'pendingPlay' : 'pendingSeek';
+                break;
+            case 'buffering':
+                newSyncState = 'buffering';
+                break;
+            case 'complete':
+                newSyncState = this.currentIntent.type === 'play' ? 'playing' : 'paused';
+                break;
+            default:
+                newSyncState = 'paused';
+        }
+
+        if (newSyncState !== this.syncState) {
+            this.syncState = newSyncState;
+            bus.emit('syncStateChanged', { 
+                state: this.syncState, 
+                playhead: this.currentIntent.playhead 
+            });
+        }
     }
 
     /**
      * Clean up event listeners and resources
      */
     destroy() {
-        // Remove LOCAL command listeners
+        // Remove all listeners (same as before)
         bus.off('localPlay', this.handleLocalPlay);
         bus.off('localPause', this.handleLocalPause);
         bus.off('localSeek', this.handleLocalSeek);
         bus.off('localSeekRelative', this.handleLocalSeekRelative);
         bus.off('localAudioChange', this.handleLocalAudioChange);
-
-        // Remove REMOTE command listeners
         bus.off('remotePlayIntent', this.handleRemotePlayIntent);
         bus.off('remotePlayReady', this.handleRemotePlayReady);
         bus.off('remotePlayNotReady', this.handleRemotePlayNotReady);
         bus.off('remotePauseIntent', this.handleRemotePauseIntent);
         bus.off('remoteSeekIntent', this.handleRemoteSeekIntent);
         bus.off('remoteSeekComplete', this.handleRemoteSeekComplete);
-
-        bus.off('remotePlayReady', this.handleRemotePlayReady);
         bus.off('remoteAudioChange', this.handleRemoteAudioChange);
-
-        // Remove buffer monitoring listeners
         bus.off('bufferingStarted', this.handleBufferingStarted);
         bus.off('bufferingComplete', this.handleBufferingComplete);
-
-        // Remove player initialization listener
-        bus.off('playersInitialized', this.handlePlayersInitialized);
         bus.off('stateChange', this.handleDVPStateChange);
+        bus.off('playersInitialized', this.handlePlayersInitialized);
     }
 
-    handleDVPStateChange = (newState) => {
-        // When the player becomes ready after a seek, verify it's truly ready before sending seekComplete
-        if (newState.state === 'ready' && this.syncState === 'pendingSeek' && this.pendingPlayhead !== null) {
-            const currentTime = newState.playhead;
-            if (Math.abs(currentTime - this.pendingPlayhead) < 0.1) {
-                // Use DVP's proper readiness check to verify videos are truly ready
-                const dvp = this.getDualVideoPlayer();
-                if (dvp && dvp.isActuallyReady()) {
-                    console.log(`[Sync] Local seek to ${this.pendingPlayhead} complete and videos truly ready, notifying remote`);
-                    this.getPeerConnection()?.sendCommand({ 
-                        type: 'seekComplete', 
-                        playhead: this.pendingPlayhead 
-                    });
-                    
-                    // Mark that we've completed our local seek
-                    this.localSeekComplete = true;
-                    
-                    // Check if both peers have completed
-                    this.checkSeekCompletion();
-                } else {
-                    console.log(`[Sync] DVP reports ready but videos not actually ready - waiting for true readiness`);
-                }
-            }
-        }
-    };
-
-    // --- Local Event Handlers ---------------------------------------------------
+    // ============================================================================
+    // LOCAL EVENT HANDLERS - Simplified using intent-driven approach
+    // ============================================================================
 
     handleLocalPlay = () => {
         const dvp = this.getDualVideoPlayer();
         if (!dvp) return;
+        
         const state = dvp.getState();
+        this.startIntent('play', 'local', { playhead: state.playhead });
 
-        // Check if videos are ready for playback
         if (state.state === 'ready') {
-            this.syncState = 'pendingPlay';
-            this.pendingPlayhead = state.playhead;
             // Send play intent to remote peer
-            this.getPeerConnection()?.sendCommand({ type: 'playIntent', playhead: state.playhead });
-            // Update UI to show pending state
-            bus.emit('syncStateChanged', { state: this.syncState, playhead: this.pendingPlayhead });
+            this.getPeerConnection()?.sendCommand({ 
+                type: 'playIntent', 
+                playhead: state.playhead,
+                timestamp: this.currentIntent.timestamp
+            });
         } else {
-            // Videos not ready, enter buffering state
-            this.syncState = 'buffering';
-            
-            // Notify remote peer that we're not ready to play
-            console.log('[Sync] Local videos not ready for play, sending playNotReady');
+            // Not ready, enter buffering
+            this.updateIntentStatus('buffering');
             this.getPeerConnection()?.sendCommand({ type: 'playNotReady' });
-            
-            bus.emit('syncStateChanged', { state: this.syncState });
         }
     };
 
     handleLocalPause = () => {
         const dvp = this.getDualVideoPlayer();
         if (!dvp) return;
+        
         const state = dvp.getState();
-
-        // Pause locally
+        
+        // Pause locally immediately
         if (state.state === 'playing') {
             dvp.pause();
         }
 
-        // Update sync state and notify remote peer
-        this.syncState = 'paused';
-        this.pendingPlayhead = null;
-        this.getPeerConnection()?.sendCommand({ type: 'pauseIntent', playhead: state.playhead });
-        bus.emit('syncStateChanged', { state: this.syncState });
+        // Start pause intent and notify remote
+        this.startIntent('pause', 'local', { playhead: state.playhead });
+        this.getPeerConnection()?.sendCommand({ 
+            type: 'pauseIntent', 
+            playhead: state.playhead,
+            timestamp: this.currentIntent.timestamp
+        });
+        
+        // Pause completes immediately
+        this.completeIntent();
     };
 
     handleLocalSeek = (playhead) => {
         const dvp = this.getDualVideoPlayer();
         if (!dvp) return;
+        
         const state = dvp.getState();
         const safePlayhead = Math.max(0, Math.min(state.duration, playhead));
 
-        console.log(`[Sync] Local seek to ${safePlayhead}, current state: ${this.syncState}`);
-
-        // Update sync state and reset completion flags
-        this.syncState = 'pendingSeek';
-        this.pendingPlayhead = safePlayhead;
-        this.localSeekComplete = false;
-        this.remoteSeekComplete = false;
-        bus.emit('syncStateChanged', { state: this.syncState, playhead: this.pendingPlayhead });
+        this.startIntent('seek', 'local', { playhead: safePlayhead });
         
         // Notify remote peer
-        console.log(`[Sync] Sending seekIntent to remote peer, playhead: ${safePlayhead}`);
-        this.getPeerConnection()?.sendCommand({ type: 'seekIntent', playhead: safePlayhead });
+        this.getPeerConnection()?.sendCommand({ 
+            type: 'seekIntent', 
+            playhead: safePlayhead,
+            timestamp: this.currentIntent.timestamp
+        });
         
-        // Perform the seek - this will trigger a stateChange event when complete
+        // Perform local seek
         dvp.seek(safePlayhead);
     };
 
     handleLocalSeekRelative = (seconds) => {
         const dvp = this.getDualVideoPlayer();
         if (!dvp) return;
+        
         const state = dvp.getState();
         const newPlayhead = Math.max(0, Math.min(state.duration, state.playhead + seconds));
         this.handleLocalSeek(newPlayhead);
@@ -193,309 +263,278 @@ export class SynchronizationEngine {
     handleLocalAudioChange = (track) => {
         const dvp = this.getDualVideoPlayer();
         if (!dvp) return;
-        if (!['local', 'remote', 'none'].includes(track)) {
-            console.error('Invalid audio track', track);
-            return;
-        }
+        
+        this.startIntent('audio', 'local', { track });
         dvp.switchAudio(track);
-        this.getPeerConnection()?.sendCommand({ type: 'audioChange', track });
-    };
-
-    // --- Player Initialization Handler -----------------------------------------
-
-    handlePlayersInitialized = () => {
-        const dvp = this.getDualVideoPlayer();
-        if (!dvp) return;
-
-        // Get the first shared frame position and seek to it
-        const firstSharedFramePos = dvp.getFirstSharedFramePosition();
-        dvp.seek(firstSharedFramePos);
-
-        // Notify remote peer to seek to the same position
-        this.syncState = 'pendingSeek';
-        this.pendingPlayhead = firstSharedFramePos;
-        this.getPeerConnection()?.sendCommand({
-            type: 'seekIntent',
-            playhead: firstSharedFramePos
+        
+        this.getPeerConnection()?.sendCommand({ 
+            type: 'audioChange', 
+            track,
+            timestamp: this.currentIntent.timestamp
         });
-        bus.emit('syncStateChanged', { state: this.syncState, playhead: this.pendingPlayhead });
+        
+        // Audio change completes immediately
+        this.completeIntent();
     };
 
-    // --- Remote Event Handlers --------------------------------------------------
+    // ============================================================================
+    // REMOTE EVENT HANDLERS - Simplified conflict resolution
+    // ============================================================================
 
     handleRemotePlayIntent = (command) => {
-        if (command.playhead === undefined) {
-            throw new Error('Invalid remotePlayIntent: missing playhead');
+        const { playhead, timestamp = 0 } = command;
+        
+        // Check if we should accept this remote intent
+        if (!this.shouldAcceptRemoteIntent(timestamp)) {
+            console.log('[Intent] Ignoring stale remote play intent');
+            return;
         }
+
         const dvp = this.getDualVideoPlayer();
         if (!dvp) return;
+        
+        this.startIntent('play', 'remote', { playhead });
+        this.currentIntent.timestamp = timestamp; // Use remote timestamp
+        
         const state = dvp.getState();
-
-        // Check if we're ready to play at the requested position
         if (state.state === 'ready') {
-            // We're ready, send confirmation and start playing
-            this.getPeerConnection()?.sendCommand({ type: 'playReady', playhead: command.playhead });
-            this.syncState = 'playing';
+            // Ready to play - send confirmation and start
+            this.getPeerConnection()?.sendCommand({ type: 'playReady', playhead });
             dvp.play();
-            bus.emit('syncStateChanged', { state: this.syncState });
+            this.updateIntentStatus('complete');
         } else {
-            // Not ready, send not ready response and remember the pending intent
-            this.getPeerConnection()?.sendCommand({ type: 'playNotReady', playhead: command.playhead });
-            this.pendingRemotePlayIntent = command; // Remember this for when buffering completes
-            this.syncState = 'buffering';
-            bus.emit('syncStateChanged', { state: this.syncState });
+            // Not ready - enter buffering
+            this.getPeerConnection()?.sendCommand({ type: 'playNotReady', playhead });
+            this.updateIntentStatus('buffering');
         }
 
-        // Pulse play/pause button
         bus.emit('uiPulse', { elementId: 'playPauseButton' });
     };
 
     handleRemotePlayReady = (command) => {
-        if (command.playhead === undefined) {
-            throw new Error('Invalid remotePlayReady: missing playhead');
-        }
-
-        // Remote peer is ready, start playing if we're in pendingPlay state
-        if (this.syncState === 'pendingPlay') {
+        // Only relevant if we have a local play intent waiting
+        if (this.currentIntent.type === 'play' && 
+            this.currentIntent.initiator === 'local' && 
+            this.currentIntent.status === 'coordinating') {
+            
             const dvp = this.getDualVideoPlayer();
             if (dvp) {
-                this.syncState = 'playing';
                 dvp.play();
-                bus.emit('syncStateChanged', { state: this.syncState });
+                this.updateIntentStatus('complete');
             }
         }
 
-        // Pulse play/pause button
         bus.emit('uiPulse', { elementId: 'playPauseButton' });
     };
 
     handleRemotePlayNotReady = (command) => {
-        // Remote peer is not ready, transition to appropriate waiting state
-        console.log('[Sync] Remote peer not ready, entering waiting state');
-        
-        // If we were trying to play, go to pendingPlay to show hourglass
-        if (this.syncState === 'paused' || this.syncState === 'playing') {
-            this.syncState = 'pendingPlay';
-            bus.emit('syncStateChanged', { state: this.syncState });
+        // Only relevant if we have a local play intent
+        if (this.currentIntent.type === 'play' && 
+            this.currentIntent.initiator === 'local') {
+            this.updateIntentStatus('waiting');
         }
-        
-        // UI will show waiting indicator
+
         bus.emit('uiPulse', { elementId: 'playPauseButton' });
     };
 
     handleRemotePauseIntent = (command) => {
-        if (command.playhead === undefined) {
-            throw new Error('Invalid remotePauseIntent: missing playhead');
+        const { playhead, timestamp = 0 } = command;
+        
+        if (!this.shouldAcceptRemoteIntent(timestamp)) {
+            return;
         }
+
         const dvp = this.getDualVideoPlayer();
         if (!dvp) return;
 
         // Pause locally
         dvp.pause();
 
-        // Additional synchronization check – verify our playhead matches the one sent by the remote peer
-        const { playhead } = dvp.getState();
-        const drift = Math.abs(playhead - command.playhead);
-        if (drift > this.#PEERS_OUT_OF_SYNC_THRESHOLD_SECONDS) { // allow up to 100 ms difference
-            console.warn(`[Sync] Playhead drift of ${drift.toFixed(3)}s detected on remotePauseIntent (local: ${playhead.toFixed(3)}, remote: ${command.playhead.toFixed(3)}). Re-seeking locally.`);
-            dvp.seek(command.playhead);
+        // Check for drift and correct if needed
+        const state = dvp.getState();
+        const drift = Math.abs(state.playhead - playhead);
+        if (drift > this.#PEERS_OUT_OF_SYNC_THRESHOLD_SECONDS) {
+            console.warn(`[Sync] Drift ${drift.toFixed(3)}s detected, re-seeking`);
+            dvp.seek(playhead);
         }
 
-        // Update synchronization state
-        this.syncState = 'paused';
-        this.pendingPlayhead = null;
-        bus.emit('syncStateChanged', { state: this.syncState });
+        this.startIntent('pause', 'remote', { playhead });
+        this.currentIntent.timestamp = timestamp;
+        this.completeIntent(); // Pause completes immediately
 
-        // Pulse play/pause button
         bus.emit('uiPulse', { elementId: 'playPauseButton' });
     };
 
     handleRemoteSeekIntent = (command) => {
-        if (command.playhead === undefined) {
-            throw new Error('Invalid remoteSeekIntent: missing playhead');
+        const { playhead, timestamp = 0 } = command;
+        
+        if (!this.shouldAcceptRemoteIntent(timestamp)) {
+            return;
         }
+
         const dvp = this.getDualVideoPlayer();
         if (!dvp) return;
 
-        console.log(`[Sync] Received seekIntent from remote, seeking to ${command.playhead}`);
-
-        // Seek locally and enter pendingSeek state
-        this.syncState = 'pendingSeek';
-        this.pendingPlayhead = command.playhead;
-        bus.emit('syncStateChanged', { state: this.syncState, playhead: this.pendingPlayhead });
+        this.startIntent('seek', 'remote', { playhead });
+        this.currentIntent.timestamp = timestamp;
         
-        // Perform the seek - this will trigger a stateChange event when complete
-        dvp.seek(command.playhead);
-
-        // Pulse scrubber and time display
+        dvp.seek(playhead);
         bus.emit('uiPulse', { elementId: 'timecode' });
     };
 
-    /**
-     * Check if both local and remote seek completion have occurred
-     * Only transition to paused when both peers have truly completed
-     */
-    checkSeekCompletion() {
-        if (this.localSeekComplete && this.remoteSeekComplete) {
-            console.log(`[Sync] Both peers completed seek to ${this.pendingPlayhead}, transitioning to paused`);
-            this.syncState = 'paused';
-            this.pendingPlayhead = null;
-            this.localSeekComplete = false;
-            this.remoteSeekComplete = false;
-            bus.emit('syncStateChanged', { state: this.syncState });
-        }
-    }
-
     handleRemoteSeekComplete = (command) => {
-        if (command.playhead === undefined) {
-            throw new Error('Invalid remoteSeekComplete: missing playhead');
-        }
-
-        console.log(`[Sync] Remote peer completed seek to ${command.playhead}, current state: ${this.syncState}`);
-
-        // If we're in pendingSeek state and the playhead matches, mark remote completion
-        if (this.syncState === 'pendingSeek' && Math.abs((this.pendingPlayhead || 0) - command.playhead) < 0.1) {
-            this.remoteSeekComplete = true;
-            
-            // Check if both peers have completed
-            this.checkSeekCompletion();
-        }
-    };
-
-    handleRemoteBufferingStarted = (command) => {
-        // Remote peer started buffering, pause locally and wait
-        const dvp = this.getDualVideoPlayer();
-        if (dvp && this.syncState === 'playing') {
-            dvp.pause();
-            this.syncState = 'paused';
-            bus.emit('syncStateChanged', { state: this.syncState });
-        }
-
-        // Show buffering indicator
-        bus.emit('uiPulse', { elementId: 'playPauseButton' });
-    };
-
-    handleRemotePlayReady = (command) => {
-        console.log('[Sync] Remote peer is ready, checking if we can start playing');
+        const { playhead } = command;
         
-        // If we're also ready (in pendingPlay), both peers can start playing
-        if (this.syncState === 'pendingPlay') {
-            console.log('[Sync] Both peers ready, starting playback');
-            this.syncState = 'playing';
-            const dvp = this.getDualVideoPlayer();
-            if (dvp) {
-                dvp.play();
-                bus.emit('syncStateChanged', { state: this.syncState });
-            }
+        // Only relevant if we have a seek intent in progress
+        if (this.currentIntent.type === 'seek' && 
+            Math.abs((this.currentIntent.playhead || 0) - playhead) < 0.1) {
+            
+            // Both peers have completed seek
+            this.completeIntent();
         }
-
-        // Pulse play/pause button to indicate remote readiness
-        bus.emit('uiPulse', { elementId: 'playPauseButton' });
     };
 
     handleRemoteAudioChange = (command) => {
-        const { track } = command;
-        if (!track) {
-            throw new Error('Invalid remoteAudioChange: missing track');
+        const { track, timestamp = 0 } = command;
+        
+        if (!this.shouldAcceptRemoteIntent(timestamp)) {
+            return;
         }
+
         const dvp = this.getDualVideoPlayer();
         if (!dvp) return;
-        let localTrack;
-        let elementId;
-        if (track === 'local') {
-            localTrack = 'remote';
-            elementId = 'right-audio-activate';
-        } else if (track === 'remote') {
-            localTrack = 'local';
-            elementId = 'left-audio-activate';
-        } else {
-            localTrack = 'none';
-            // Could pulse both, or neither; here, pulse both
-            bus.emit('uiPulse', { elementId: 'left-audio-activate' });
-            bus.emit('uiPulse', { elementId: 'right-audio-activate' });
-        }
+
+        this.startIntent('audio', 'remote', { track });
+        this.currentIntent.timestamp = timestamp;
+
+        // Map remote track to local track (opposite)
+        const localTrack = track === 'local' ? 'remote' : 
+                          track === 'remote' ? 'local' : 'none';
+        
         dvp.switchAudio(localTrack);
-        if (elementId) {
-            bus.emit('uiPulse', { elementId });
+        this.completeIntent();
+
+        // Pulse appropriate UI elements
+        const elementMap = { 'local': 'right-audio-activate', 'remote': 'left-audio-activate' };
+        if (elementMap[track]) {
+            bus.emit('uiPulse', { elementId: elementMap[track] });
         }
     };
 
-    // --- Buffer Monitoring Handlers ---------------------------------------------
+    // ============================================================================
+    // BUFFERING HANDLERS - Dramatically simplified
+    // ============================================================================
 
     handleBufferingStarted = (event) => {
-        // Remember the state before buffering so we can resume appropriately
-        this.stateBeforeBuffering = this.syncState;
-        
-        // Local videos started buffering during playback
-        this.syncState = 'buffering';
-
-        // Notify remote peer that we are currently not ready to play
-        this.getPeerConnection()?.sendCommand({ type: 'playNotReady' });
-
-        // Update UI state
-        bus.emit('syncStateChanged', { state: this.syncState, bufferingVideos: event.videos });
+        // If we have an active intent, mark it as buffering
+        if (this.currentIntent.type) {
+            this.updateIntentStatus('buffering');
+            
+            // Notify remote we're not ready
+            this.getPeerConnection()?.sendCommand({ type: 'playNotReady' });
+        }
     };
 
     handleBufferingComplete = () => {
-        // Local videos finished buffering
-        if (this.syncState === 'buffering') {
-            console.log('[Sync] Local buffering complete');
-            
-            // Check if there's a pending remote play intent we need to respond to
-            if (this.pendingRemotePlayIntent) {
-                console.log('[Sync] Responding to pending remote play intent with playReady');
-                const dvp = this.getDualVideoPlayer();
-                if (dvp) {
-                    // Send playReady to the remote peer
+        // If we have a buffering intent, try to complete it
+        if (this.currentIntent.status === 'buffering') {
+            const dvp = this.getDualVideoPlayer();
+            if (!dvp) return;
+
+            if (this.currentIntent.type === 'play') {
+                if (this.currentIntent.initiator === 'remote') {
+                    // Respond to remote play intent
                     this.getPeerConnection()?.sendCommand({ 
                         type: 'playReady', 
-                        playhead: this.pendingRemotePlayIntent.playhead 
+                        playhead: this.currentIntent.playhead 
                     });
-                    
-                    // Start playing
-                    this.syncState = 'playing';
                     dvp.play();
-                }
-                
-                // Clear the pending remote play intent
-                this.pendingRemotePlayIntent = null;
-            }
-            // If we were playing before buffering, attempt to resume
-            else if (this.stateBeforeBuffering === 'playing') {
-                console.log('[Sync] Attempting to resume playback after buffering');
-                this.syncState = 'pendingPlay';
-                
-                // Get current playhead and send play intent to coordinate with remote peer
-                const dvp = this.getDualVideoPlayer();
-                if (dvp) {
-                    const { playhead } = dvp.getState();
-                    this.pendingPlayhead = playhead;
+                    this.updateIntentStatus('complete');
+                } else {
+                    // Resume local play intent
                     this.getPeerConnection()?.sendCommand({ 
                         type: 'playIntent', 
-                        playhead: playhead 
+                        playhead: this.currentIntent.playhead,
+                        timestamp: this.currentIntent.timestamp
                     });
+                    this.updateIntentStatus('coordinating');
                 }
             } else {
-                // Otherwise just go to paused
-                console.log('[Sync] Buffering complete, transitioning to paused');
-                this.syncState = 'paused';
-                this.pendingPlayhead = null;
+                // For non-play intents, just complete
+                this.completeIntent();
             }
-            
-            // Clear the remembered state
-            this.stateBeforeBuffering = null;
-            bus.emit('syncStateChanged', { state: this.syncState });
         }
     };
 
-    // --- Initialization Handler ------------------------------------------------
+    // ============================================================================
+    // DVP STATE CHANGE HANDLER - Simplified seek completion
+    // ============================================================================
 
-    handlePlayersInitialized = ({ playhead, duration, localConfig, remoteConfig }) => {
+    handleDVPStateChange = (newState) => {
+        console.log(`[DVP] State change: ${newState.state}, playhead: ${newState.playhead?.toFixed(3)}`);
+        console.log(`[DVP] Current intent:`, this.currentIntent);
+        
+        // Handle seek completion
+        if (newState.state === 'ready' && 
+            this.currentIntent.type === 'seek' && 
+            this.currentIntent.playhead !== null) {
+            
+            console.log(`[DVP] Seek completion conditions met`);
+            const currentTime = newState.playhead;
+            const drift = Math.abs(currentTime - this.currentIntent.playhead);
+            console.log(`[DVP] Playhead drift: ${drift.toFixed(3)}s (target: ${this.currentIntent.playhead.toFixed(3)}, actual: ${currentTime.toFixed(3)})`);
+            
+            if (drift < 0.1) {
+                const dvp = this.getDualVideoPlayer();
+                const isActuallyReady = dvp && dvp.isActuallyReady();
+                console.log(`[DVP] DVP actually ready: ${isActuallyReady}`);
+                
+                if (isActuallyReady) {
+                    console.log(`[Sync] Local seek complete, notifying remote (initiator: ${this.currentIntent.initiator})`);
+                    this.getPeerConnection()?.sendCommand({ 
+                        type: 'seekComplete', 
+                        playhead: this.currentIntent.playhead 
+                    });
+                    
+                    // If this was a local seek, wait for remote completion
+                    // If this was a remote seek, we're done
+                    if (this.currentIntent.initiator === 'remote') {
+                        console.log(`[Sync] Remote seek complete, finishing intent`);
+                        this.completeIntent();
+                    } else {
+                        console.log(`[Sync] Local seek complete, waiting for remote`);
+                    }
+                } else {
+                    console.log(`[DVP] Videos not actually ready yet, waiting...`);
+                }
+            } else {
+                console.log(`[DVP] Playhead drift too large (${drift.toFixed(3)}s), not sending seekComplete`);
+            }
+        } else {
+            console.log(`[DVP] Seek completion conditions not met:`);
+            console.log(`  - State ready: ${newState.state === 'ready'}`);
+            console.log(`  - Intent is seek: ${this.currentIntent.type === 'seek'}`);
+            console.log(`  - Has playhead: ${this.currentIntent.playhead !== null}`);
+        }
+    };
+
+    // ============================================================================
+    // INITIALIZATION HANDLER
+    // ============================================================================
+
+    handlePlayersInitialized = () => {
         const dvp = this.getDualVideoPlayer();
         if (!dvp) return;
 
-        // Determine the first shared frame across both videos and align to it
         const firstSharedFramePos = dvp.getFirstSharedFramePosition();
+        this.startIntent('seek', 'local', { playhead: firstSharedFramePos });
+        
+        this.getPeerConnection()?.sendCommand({
+            type: 'seekIntent',
+            playhead: firstSharedFramePos,
+            timestamp: this.currentIntent.timestamp
+        });
+        
         dvp.seek(firstSharedFramePos);
     };
 }
