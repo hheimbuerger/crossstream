@@ -5,3 +5,4 @@ cache/**
 /.SynologyWorkingDirectory/
 /benchmark/report.txt
 /.vscode/settings.json
+/.vscode/launch.json
